@@ -16,6 +16,7 @@ var { getConnection } = require('@xeplr/db');
 var createFactoryRouter = require('./lib/router');
 var { createScreensStore } = require('./lib/screens');
 var { createRecordsStore } = require('./lib/records');
+var { createHooks } = require('./lib/hooks');
 
 var requiredEnv = [];
 
@@ -27,6 +28,7 @@ var _stores = null;
  * @param config.database    …or open one: the app database name
  * @param config.connection  its connection (encrypted string or { host, port, user, password })
  * @param config.connectionName  default 'factory'
+ * @param config.hooks       { screenId: { save, get, delete } } — see lib/hooks.js
  */
 async function init(config) {
   config = config || {};
@@ -37,9 +39,10 @@ async function init(config) {
     if (!dbName) throw new Error('@xeplr/factory: no database. Pass { knex } or { database, connection } (or set DB_FACTORY).');
     _knex = await getConnection(dbName, config.connection, { bind: false, connectionName: config.connectionName || 'factory' });
   }
+  var hooks = createHooks(config.hooks);            // throws on a malformed hooks file, at startup
   var screens = createScreensStore(_knex);
-  var records = createRecordsStore(_knex, screens);
-  _stores = { screens: screens, records: records };
+  var records = createRecordsStore(_knex, screens, hooks);
+  _stores = { screens: screens, records: records, hooks: hooks };
   return _stores;
 }
 
@@ -55,4 +58,9 @@ function router(options) {
   return createFactoryRouter(stores(), options);
 }
 
-module.exports = { requiredEnv: requiredEnv, init: init, router: router, stores: stores };
+/** Add or replace one screen's hooks after init. */
+function registerHooks(screenId, hooks) {
+  stores().hooks.register(screenId, hooks);
+}
+
+module.exports = { requiredEnv: requiredEnv, init: init, router: router, stores: stores, registerHooks: registerHooks };
