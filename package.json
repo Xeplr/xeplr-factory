@@ -1,0 +1,50 @@
+{
+  "name": "@xeplr/factory",
+  "version": "1.0.0",
+  "description": "Server side of @xeplr/ui-factory: versioned screen designs, and records saved to real per-entity tables with the screen's own validation",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib/",
+    "bin/",
+    "migrations/",
+    "migrations-auth/"
+  ],
+  "bin": {
+    "xeplr-factory-migrate": "./bin/migrate.js"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "keywords": [
+    "form-builder",
+    "screens",
+    "records",
+    "express",
+    "xeplr"
+  ],
+  "author": "xeplr",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@xeplr/db": "^1.0.0",
+    "@xeplr/schema-handler": "^1.0.5",
+    "@xeplr/ui-factory": "^1.0.0",
+    "@xeplr/utils": "^1.0.0"
+  },
+  "peerDependencies": {
+    "express": "^4.0.0 || ^5.0.0"
+  },
+  "devDependencies": {
+    "express": "^5.2.0"
+  }
+}
