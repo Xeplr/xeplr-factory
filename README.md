@@ -16,7 +16,7 @@ Records are never stored as JSON. Every entity is an ordinary table your reports
 |---|---|
 | Screen designs (layout, labels, validation, styles) | `factory_screens` — one row per screen per version, draft or published |
 | Records | the entity's own table: `employees`, `departments`, … |
-| Creating and changing those tables | your app's migrations, drafted from the form by `xeplr-factory migration` |
+| Creating and changing those tables | **Publish** — directly, in the publish transaction; dropping a column needs confirmation |
 | Forms, lists, the designer | `@xeplr/ui-factory` in the browser, talking to these routes |
 
 ## Install
@@ -49,39 +49,28 @@ and add `node_modules/@xeplr/factory/migrations-auth` to `XEPLR_AUTH_MIGRATIONS`
 
 ## A new entity, start to finish
 
-Usually done by Claude from a request like *"a form for employees with name, department and start date"*:
+Usually done by Claude from a request like *"a form for farming departments with name, region and head"*:
 
 ```sh
-# 1. two screens and their pages
-npx xeplr-factory screens employee.entity.json -o src/screens/employee
-
-# 2. the table, as an ordinary migration in the app
-npx xeplr-factory migration src/screens/employee/employee-edit.screen.json -o migrations
-#    → migrations/0067_factory_employees_create.sql   (review it; it is yours)
-
-# 3. apply it with the app's normal migrate:up
+npx xeplr-factory screens farming-department.entity.json -o src/screens/farming-department
 ```
 
-Then save the screens as drafts and **Publish** them (from the designer, or `PUT …/draft` + `POST …/publish`).
-
-**Publishing checks the table.** If the screen has a field with no column — the migration has not run — publish is refused with `409` and the exact SQL that would fix it:
-
-```json
-{ "message": "Table \"employees\" has no column for: employeeCode — run the migration that adds them",
-  "dataArray": [{ "migration": "ALTER TABLE \"employees\" ADD COLUMN IF NOT EXISTS \"employeeCode\" varchar(12);" }] }
-```
+Save the two screens as drafts and **Publish** them (from the designer, or `PUT …/draft` then `POST …/publish`). **Publishing creates the table** — no migration files. Nothing else to deploy: the routes below serve every screen by its id.
 
 ## Changing a form later
 
-Draft the change, then `xeplr-factory migration employee-edit.screen.json --from <the published version> -o migrations`:
+Edit the draft and publish again. The table is compared with the screen **as the table really is** in the database, and changed in the same transaction that publishes — both happen or neither:
 
-| change | migration |
+| change | on publish |
 |---|---|
 | new field | `ADD COLUMN` |
 | wider (varchar 80 → 120, varchar → text, integer → numeric) | `ALTER COLUMN … TYPE` |
-| narrower, or a different kind of value | **refused** — write it by hand |
-| field removed | column **kept**, noted in the migration; dropping data is your decision |
-| field renamed | field names that are already columns are **locked** in the designer (`lockedNames`) |
+| narrower, or a different kind of value | **refused** (409), nothing runs |
+| field removed | **asks first** (409 with `confirm: [{ column, records }]`); publish again with `{ "confirmDrop": ["phone"] }` to `DROP COLUMN` — the column and all its values, for every company |
+| a column no screen created, or one another company's screen still uses | never dropped (reported in `keep`) |
+| field renamed | field names that are already columns are **locked** in the designer (`lockedNames`) — a rename would drop the old column's data |
+
+The database user needs permission to create and alter tables in the app database. `npx xeplr-factory migration edit.screen.json` previews the SQL without running it.
 
 ## Columns
 
@@ -106,7 +95,7 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `GET /factory/screens` | every screen: latest published version, draft waiting? |
 | `GET /factory/screens/:key` | latest published (`?draft=true` for the draft), with `lockedNames` |
 | `PUT /factory/screens/:key/draft` | save the draft `{ document }` — refused (422) if it does not validate |
-| `POST /factory/screens/:key/publish` | draft → next version; 409 with `migration` if the table is not ready |
+| `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns |
 | `GET /factory/tables` | tables published screens use |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |
 | `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields) |
@@ -133,7 +122,7 @@ const api = createFactoryApi({ fetch: authFetch })
 npm test
 ```
 
-Runs against a real Postgres (the usual `PG*` variables): a throwaway database, the routes over HTTP, migrations applied, records in real tables. Skipped — and reported as skipped — when no Postgres is reachable.
+Runs against a real Postgres (the usual `PG*` variables): a throwaway database, the routes over HTTP, tables created and changed by publishing, records in real tables. Skipped — and reported as skipped — when no Postgres is reachable.
 
 ## License
 

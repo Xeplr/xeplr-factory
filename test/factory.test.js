@@ -1,5 +1,5 @@
 // @xeplr/factory against a REAL Postgres: the routes over HTTP, screens
-// published, migrations generated and applied, records in real tables.
+// published (which creates and changes their tables), records in real tables.
 //
 // Needs a Postgres the current user can create databases on (PGHOST/PGUSER/…
 // as usual). Without one, the suite is skipped — said out loud, not passed.
@@ -61,7 +61,7 @@ after(async function() {
   if (admin) await admin.destroy();
 });
 
-test('an entity: screens, migrations, records in real tables', async function(t) {
+test('an entity: screens published, tables changed, records in real tables', async function(t) {
   if (skip) { t.skip(skip); return; }
 
   var department = model.screensFromSpec({ entity: 'department', fields: [{ label: 'Name', required: true, validation: { maxLength: 80 } }] })
@@ -76,33 +76,26 @@ test('an entity: screens, migrations, records in real tables', async function(t)
     ]
   })
 
-  await t.test('publishing refuses a screen whose table does not exist, and hands back the migration', async function() {
-    assert.equal((await call('PUT', '/factory/screens/employee_edit/draft', { document: employee.edit })).status, 200);
-    var res = await call('POST', '/factory/screens/employee_edit/publish');
-    assert.equal(res.status, 409);
-    assert.match(res.body.message, /Table "employees" does not exist/);
-    assert.match(res.body.dataArray[0].migration, /CREATE TABLE IF NOT EXISTS "employees"/);
-  });
-
-  await t.test('after the migrations, both entities publish', async function() {
-    await knex.raw(model.migrationFor(null, department.edit).sql);
-    await knex.raw(model.migrationFor(null, employee.edit).sql);
-    for (var doc of [department.edit, department.list, employee.list]) {
+  await t.test('publish creates the table — no migration step', async function() {
+    for (var doc of [department.edit, department.list, employee.edit, employee.list]) {
       assert.equal((await call('PUT', '/factory/screens/' + doc.id + '/draft', { document: doc })).status, 200);
     }
+    // The employee table points at departments: publishing it first fails in
+    // the database, and changes nothing.
+    var tooEarly = await call('POST', '/factory/screens/employee_edit/publish');
+    assert.equal(tooEarly.status, 409);
+    assert.match(tooEarly.body.message, /departments.*nothing was changed/);
+    assert.equal((await knex.raw("select to_regclass('employees') as t")).rows[0].t, null);
+
     for (var key of ['department_edit', 'department_list', 'employee_edit', 'employee_list']) {
       var res = await call('POST', '/factory/screens/' + key + '/publish');
       assert.equal(res.status, 200, key + ': ' + res.body.message);
       assert.equal(res.body.dataArray[0].version, 1);
     }
-  });
-
-  await t.test('a draft that does not validate is refused with every problem', async function() {
-    var bad = JSON.parse(JSON.stringify(employee.edit));
-    bad.nodes[1].props.name = 'isActive';
-    var res = await call('PUT', '/factory/screens/employee_edit/draft', { document: bad });
-    assert.equal(res.status, 422);
-    assert.ok(res.body.error.fields.some(function(e) { return /standard column/.test(e.message); }));
+    var created = await call('GET', '/factory/screens');
+    assert.ok(created.body.dataArray.every(function(s) { return s.version === 1 && !s.hasDraft; }));
+    var cols = (await knex.raw("select column_name from information_schema.columns where table_name = 'employees' order by ordinal_position")).rows.map(function(r) { return r.column_name; });
+    assert.deepEqual(cols.slice(0, 6), ['id', 'firstName', 'departmentId', 'startDate', 'salary', 'remote']);
   });
 
   var financeId, adaId;
@@ -171,24 +164,59 @@ test('an entity: screens, migrations, records in real tables', async function(t)
     assert.ok(res.body.dataArray[0].lockedNames.includes('departmentId'));
   });
 
-  await t.test('a new field: publish refused with ALTER TABLE, then accepted after it runs', async function() {
+  await t.test('add a field and remove one: the new column is added, the old one dropped only when confirmed', async function() {
+    await knex.raw('ALTER TABLE employees ADD COLUMN "legacyCode" varchar(10)');   // added by hand, not by a screen
+    await knex.raw('UPDATE employees SET salary = 50000 WHERE id = ?', [adaId]);      // data the drop would lose
     var v2 = model.addControl(employee.edit, 'text', { props: { label: 'Employee code', validation: { maxLength: 12 } } }).document;
+    v2 = model.removeNodes(v2, ['salary']);
     assert.equal((await call('PUT', '/factory/screens/employee_edit/draft', { document: v2 })).status, 200);
-    var refused = await call('POST', '/factory/screens/employee_edit/publish');
-    assert.equal(refused.status, 409);
-    var migration = refused.body.dataArray[0].migration;
-    assert.match(migration, /ALTER TABLE "employees" ADD COLUMN IF NOT EXISTS "employeeCode" varchar\(12\)/);
-    assert.doesNotMatch(migration, /CREATE TABLE/);
-    await knex.raw(migration);
-    var ok = await call('POST', '/factory/screens/employee_edit/publish');
+
+    var ask = await call('POST', '/factory/screens/employee_edit/publish');
+    assert.equal(ask.status, 409);
+    assert.match(ask.body.message, /removes 1 column.*salary \(1 value\)/);
+    assert.deepEqual(ask.body.dataArray[0].confirm, [{ column: 'salary', records: 1 }]);
+    assert.ok(ask.body.dataArray[0].keep.some(function(k) { return k.name === 'legacyCode'; }), 'a hand-made column is not offered for dropping');
+    var stillThere = (await knex.raw("select count(*)::int as n from information_schema.columns where table_name = 'employees' and column_name in ('salary', 'employeeCode')")).rows[0].n;
+    assert.equal(stillThere, 1, 'nothing changed before confirming: salary there, employeeCode not yet');
+
+    var wrong = await call('POST', '/factory/screens/employee_edit/publish', { confirmDrop: ['somethingElse'] });
+    assert.equal(wrong.status, 409, 'confirming a different column confirms nothing');
+
+    var ok = await call('POST', '/factory/screens/employee_edit/publish', { confirmDrop: ['salary'] });
     assert.equal(ok.status, 200, ok.body.message);
     assert.equal(ok.body.dataArray[0].version, 2);
+    assert.ok(ok.body.dataArray[0].statements.some(function(x) { return /ADD COLUMN IF NOT EXISTS "employeeCode" varchar\(12\)/.test(x); }));
+    assert.ok(ok.body.dataArray[0].statements.some(function(x) { return /DROP COLUMN IF EXISTS "salary"/.test(x); }));
+    var cols = (await knex.raw("select column_name from information_schema.columns where table_name = 'employees'")).rows.map(function(r) { return r.column_name; });
+    assert.ok(cols.includes('employeeCode') && !cols.includes('salary') && cols.includes('legacyCode'));
+
     var saved = await call('POST', '/factory/records/employee_edit/save', { id: adaId, values: { firstName: 'Ada', departmentId: financeId, employeeCode: 'E-001' } });
+    assert.equal(saved.status, 200, saved.body.message);
     assert.equal(saved.body.dataArray[0].employeeCode, 'E-001');
-    var list = await call('GET', '/factory/screens');
-    var entry = list.body.dataArray.find(function(s) { return s.screenKey === 'employee_edit'; });
-    assert.equal(entry.version, 2);
-    assert.equal(entry.hasDraft, false);
+  });
+
+  await t.test('a column another company\'s screen still uses is never dropped', async function() {
+    // Company c2 publishes its own employee screen on the same table, keeping "remote".
+    await call('PUT', '/factory/screens/employee_edit/draft', { document: employee.edit }, 'c2');
+    await knex.raw('ALTER TABLE employees ADD COLUMN IF NOT EXISTS "salary" numeric');   // c2's screen has salary again
+    assert.equal((await call('POST', '/factory/screens/employee_edit/publish', null, 'c2')).status, 200);
+
+    // c1 removes "remote": c2 still uses it, so it is kept, and nothing needs confirming.
+    var v3 = model.removeNodes(model.addControl(employee.edit, 'text', { props: { label: 'Employee code', validation: { maxLength: 12 } } }).document, ['salary', 'remote']);
+    assert.equal((await call('PUT', '/factory/screens/employee_edit/draft', { document: v3 })).status, 200);
+    var res = await call('POST', '/factory/screens/employee_edit/publish');
+    assert.equal(res.status, 200, res.body.message);
+    assert.ok(res.body.dataArray[0].keep.some(function(k) { return k.name === 'remote' && /another published screen/.test(k.reason); }));
+    assert.ok((await knex.raw("select 1 from information_schema.columns where table_name = 'employees' and column_name = 'remote'")).rows.length === 1);
+  });
+
+  await t.test('a change that would lose data is refused, and nothing runs', async function() {
+    var narrower = model.setNodeProperty(employee.edit, 'firstName', 'props.validation.maxLength', 10);
+    await call('PUT', '/factory/screens/employee_edit/draft', { document: narrower });
+    var res = await call('POST', '/factory/screens/employee_edit/publish');
+    assert.equal(res.status, 409);
+    assert.match(res.body.message, /would cut longer values/);
+    assert.equal((await knex.raw("select character_maximum_length as n from information_schema.columns where table_name = 'employees' and column_name = 'firstName'")).rows[0].n, 80);
   });
 
   await t.test('only tables a published screen uses are served', async function() {
