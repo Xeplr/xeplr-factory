@@ -19,6 +19,8 @@ var { createScreensStore } = require('./lib/screens');
 var { createRecordsStore } = require('./lib/records');
 var { createHooks } = require('./lib/hooks');
 var { createEntitiesStore } = require('./lib/entities');
+var { FactoryModel, createModels } = require('./lib/factoryModel');
+var { scopedTable } = require('./lib/table');
 
 var requiredEnv = [];
 
@@ -31,6 +33,7 @@ var _stores = null;
  * @param config.connection  its connection (encrypted string or { host, port, user, password })
  * @param config.connectionName  default 'factory'
  * @param config.hooks       { screenId: { save, get, delete } } — see lib/hooks.js
+ * @param config.models      [TaskModel, …] — classes extending FactoryModel, see lib/factoryModel.js
  */
 async function init(config) {
   config = config || {};
@@ -42,10 +45,11 @@ async function init(config) {
     _knex = await getConnection(dbName, config.connection, { bind: false, connectionName: config.connectionName || 'factory' });
   }
   var hooks = createHooks(config.hooks);            // throws on a malformed hooks file, at startup
+  var models = createModels(config.models);        // …and on a malformed model
   var screens = createScreensStore(_knex);
-  var records = createRecordsStore(_knex, screens, hooks);
+  var records = createRecordsStore(_knex, screens, hooks, models);
   var entities = createEntitiesStore(_knex, screens, records);
-  _stores = { screens: screens, records: records, hooks: hooks, entities: entities };
+  _stores = { screens: screens, records: records, hooks: hooks, entities: entities, models: models };
   return _stores;
 }
 
@@ -126,6 +130,24 @@ function orderForPublish(documents, model) {
   return done.concat(rest);
 }
 
+/** Add or replace a table's model after init. */
+function registerModel(Model) {
+  stores().models.register(Model);
+}
+
+/**
+ * knex on a form's table with the factory's rules applied — this request's
+ * company, active rows, audit columns, the model's getters and setters, soft
+ * delete. See lib/table.js.
+ *
+ *   var open = await factory.table('tasks').where({ status: 'todo' })
+ *   await factory.table('tasks', { user: req.user }).insert({ title: 'Plant seeds' })
+ */
+function table(name, options) {
+  if (!_knex) throw new Error('@xeplr/factory: call init() before table()');
+  return scopedTable(_knex, stores().models, name, options);
+}
+
 /** Add or replace one screen's hooks after init. */
 function registerHooks(screenId, hooks) {
   stores().hooks.register(screenId, hooks);
@@ -137,6 +159,9 @@ module.exports = {
   router: router,
   stores: stores,
   registerHooks: registerHooks,
+  registerModel: registerModel,
+  table: table,
+  FactoryModel: FactoryModel,
   publishScreens: publishScreens,
   // For an app that runs migrations itself: factory_screens into its own
   // database, and the access rows into the auth database (XEPLR_AUTH_MIGRATIONS).

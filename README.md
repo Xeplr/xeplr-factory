@@ -167,6 +167,44 @@ Each operation runs, without an override:
 
 **Columns a hook may set.** `save.before` may add columns the form does not have (`fullName` worked out from two fields) — they must be real columns of the table and not standard ones (`id`, `mtId1`, audit columns). Keys the **UI** sends that are not fields of the screen are always dropped, so a request cannot write a column the form does not show.
 
+## Models
+
+How a form's values are shaped between your code and its table — like Sequelize's getters and setters. One file per form, next to its hooks (`api/screens/task/task.model.js`):
+
+```js
+var { FactoryModel } = require('@xeplr/factory')
+
+class TaskModel extends FactoryModel {
+  static table = 'tasks'
+  static fields = {
+    tags: {
+      set: (value) => (Array.isArray(value) ? value.join(',') : value),   // before it is written
+      get: (value) => (value ? value.split(',') : [])                     // after it is read
+    }
+  }
+  // More than one field at a time: override and call super.
+  static toDb(values) { return super.toDb(values) }
+  static fromDb(row) { return super.fromDb(row) }
+}
+
+await factory.init({ knex, hooks, models: [TaskModel] })     // or factory.registerModel(TaskModel)
+```
+
+Every path uses it: the screens' routes (setters after `save.before` and before the screen's rules; getters before `get.after`) and `factory.table()`. A table with no model is left as it is. **Models shape data; hooks decide behaviour.**
+
+## Your own queries: `factory.table()`
+
+The form tables are ordinary tables, so plain `knex('tasks')` works — but then the factory's rules are yours to remember. `factory.table()` is knex with them applied:
+
+```js
+var open = await factory.table('tasks').where({ status: 'todo' })             // this company's active rows, through the getters
+await factory.table('tasks', { user: req.user }).insert({ title: 'Plant seeds' })   // id, company, audit filled in; setters
+await factory.table('tasks', { user: req.user }).where({ id }).update({ status: 'done' })   // audit; cannot change the company
+await factory.table('tasks').where({ id }).del()                              // soft: isActive = false
+```
+
+Everything else is knex (`join`, `orderBy`, `count`, `first` …). Inside a hook it is `ctx.db()`. Use plain `knex('tasks')` only for work that must see every company.
+
 ## Routes
 
 All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }`.
