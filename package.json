@@ -1,6 +1,6 @@
 {
   "name": "@xeplr/factory",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Server side of @xeplr/ui-factory: versioned screen designs, and records saved to real per-entity tables with the screen's own validation",
   "main": "index.js",
   "files": [
