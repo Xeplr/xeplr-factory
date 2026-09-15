@@ -120,7 +120,7 @@ test('a new form, made in the app from its name', async function(t) {
   await t.test('creates both screens as drafts, with a starter field — no table until published', async function() {
     var res = await call('POST', '/factory/entities', { entity: 'Farming department' });
     assert.equal(res.status, 200, res.body.message);
-    assert.deepEqual(res.body.dataArray[0], { entity: 'Farming department', name: 'Farming departments', source: 'farming_departments', edit: 'farming_department_edit', list: 'farming_department_list' });
+    assert.deepEqual(res.body.dataArray[0], { key: 'farming_department', entity: 'Farming department', name: 'Farming departments', source: 'farming_departments', edit: 'farming_department_edit', list: 'farming_department_list' });
     var draft = await call('GET', '/factory/screens/farming_department_edit?draft=true');
     assert.equal(draft.status, 200, draft.body.message);
     assert.deepEqual(model.inputNodes(draft.body.dataArray[0].document).map(function(n) { return n.props.name; }), ['name']);
@@ -144,6 +144,18 @@ test('a new form, made in the app from its name', async function(t) {
     assert.equal(table.status, 409);
     assert.match(table.body.message, /A table named "invoices" already exists/);
     assert.equal((await call('POST', '/factory/entities', { entity: '  ' })).status, 422);
+  });
+
+  await t.test('a key and a separate label: the key names the screens and the table, the label is what people see', async function() {
+    var res = await call('POST', '/factory/entities', { key: 'soil_sample', label: 'Soil tests (lab)' });
+    assert.equal(res.status, 200, res.body.message);
+    assert.equal(res.body.dataArray[0].source, 'soil_samples');
+    assert.equal(res.body.dataArray[0].list, 'soil_sample_list');
+    assert.equal(res.body.dataArray[0].name, 'Soil tests (lab)');
+    var draft = await call('GET', '/factory/screens/soil_sample_edit?draft=true');
+    assert.equal(draft.body.dataArray[0].document.name, 'Soil tests (lab)');
+    assert.equal((await call('POST', '/factory/entities', { key: 'Soil Sample' })).status, 422, 'a key is lowercase with _');
+    assert.equal((await call('POST', '/factory/entities', { key: 'crop', label: 'x'.repeat(201) })).status, 422);
   });
 
   await t.test('a design permission: refused without it', async function() {

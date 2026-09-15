@@ -215,7 +215,7 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `GET /factory/screens/:key` | latest published (`?draft=true` for the draft), with `lockedNames` |
 | `PUT /factory/screens/:key/draft` | save the draft `{ document }` — refused (422) if it does not validate |
 | `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns |
-| `POST /factory/entities` | a new form from its name `{ entity, plural? }`: its list and edit screens as drafts, with a starter Name field. Refused (409) if the screens or the table already exist |
+| `POST /factory/entities` | a new form `{ key, label? }` — the key (`farming_department`) names the screens and the table and is fixed once published; the label is what people see: its list and edit screens as drafts, with a starter Name field. Refused (409) if the screens or the table already exist |
 | `GET /factory/tables` | tables published screens use |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |
 | `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields) |
