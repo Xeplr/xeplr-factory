@@ -18,6 +18,7 @@ var createFactoryRouter = require('./lib/router');
 var { createScreensStore } = require('./lib/screens');
 var { createRecordsStore } = require('./lib/records');
 var { createHooks } = require('./lib/hooks');
+var { createEntitiesStore } = require('./lib/entities');
 
 var requiredEnv = [];
 
@@ -43,7 +44,8 @@ async function init(config) {
   var hooks = createHooks(config.hooks);            // throws on a malformed hooks file, at startup
   var screens = createScreensStore(_knex);
   var records = createRecordsStore(_knex, screens, hooks);
-  _stores = { screens: screens, records: records, hooks: hooks };
+  var entities = createEntitiesStore(_knex, screens, records);
+  _stores = { screens: screens, records: records, hooks: hooks, entities: entities };
   return _stores;
 }
 

@@ -113,3 +113,42 @@ test('startup', async function(t) {
     assert.match(res.body.message, /behind the auth gate/);
   });
 });
+
+test('a new form, made in the app from its name', async function(t) {
+  if (skip) { t.skip(skip); return; }
+
+  await t.test('creates both screens as drafts, with a starter field — no table until published', async function() {
+    var res = await call('POST', '/factory/entities', { entity: 'Farming department' });
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray[0], { entity: 'Farming department', name: 'Farming departments', source: 'farming_departments', edit: 'farming_department_edit', list: 'farming_department_list' });
+    var draft = await call('GET', '/factory/screens/farming_department_edit?draft=true');
+    assert.equal(draft.status, 200, draft.body.message);
+    assert.deepEqual(model.inputNodes(draft.body.dataArray[0].document).map(function(n) { return n.props.name; }), ['name']);
+    assert.equal((await knex.raw("select to_regclass('farming_departments') as t")).rows[0].t, null);
+  });
+
+  await t.test('publishing the form, then the list, makes the table and a usable list', async function() {
+    assert.equal((await call('POST', '/factory/screens/farming_department_edit/publish', {})).status, 200);
+    assert.equal((await call('POST', '/factory/screens/farming_department_list/publish', {})).status, 200);
+    var saved = await call('POST', '/factory/records/farming_department_edit/save', { values: { name: 'North field' } });
+    assert.equal(saved.status, 200, saved.body.message);
+    assert.equal((await call('GET', '/factory/records/farming_department_list')).body.dataArray[0].name, 'North field');
+  });
+
+  await t.test('refuses a name that is taken, a table that exists, and no name', async function() {
+    var again = await call('POST', '/factory/entities', { entity: 'farming department' });
+    assert.equal(again.status, 409);
+    assert.match(again.body.message, /already exists/);
+    await knex.raw('CREATE TABLE "invoices" ("id" varchar(25) PRIMARY KEY)');
+    var table = await call('POST', '/factory/entities', { entity: 'invoice' });
+    assert.equal(table.status, 409);
+    assert.match(table.body.message, /A table named "invoices" already exists/);
+    assert.equal((await call('POST', '/factory/entities', { entity: '  ' })).status, 422);
+  });
+
+  await t.test('a design permission: refused without it', async function() {
+    var res = await call('POST', '/factory/entities', { entity: 'crop' }, 'Save factory screen draft|Publish factory screen');
+    assert.equal(res.status, 403);
+    assert.match(res.body.message, /Create factory form/);
+  });
+});

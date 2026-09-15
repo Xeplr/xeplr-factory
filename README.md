@@ -50,7 +50,7 @@ or, in an app that runs its own migrations, put `factory.migrationsDir` first in
 
 ### Access
 
-Every route is a row in the auth database's `apis` catalog — `factory:view` (screens, records, options), `factory:write` (save, delete records), `factory:design` (drafts, **publish — which changes tables**) — granted to Super Admin and CompanyAdmin (all), Creator (view, write) and Viewer (view).
+Every route is a row in the auth database's `apis` catalog — `factory:view` (screens, records, options), `factory:write` (save, delete records), `factory:design` (drafts, new forms, **publish — which changes tables**) — granted to Super Admin and CompanyAdmin (all), Creator (view, write) and Viewer (view).
 
 With `{ access: true }` each route answers only a caller whose `req.access.apis` (put on the request by the auth gate, from `/auth/api/me`) names it; anyone else gets 403 `Access denied: Publish factory screen`. A request with no `req.access` at all is refused too — the router is then mounted where no gate ran. The names are `factory.API_NAMES`.
 
@@ -177,6 +177,7 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `GET /factory/screens/:key` | latest published (`?draft=true` for the draft), with `lockedNames` |
 | `PUT /factory/screens/:key/draft` | save the draft `{ document }` — refused (422) if it does not validate |
 | `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns |
+| `POST /factory/entities` | a new form from its name `{ entity, plural? }`: its list and edit screens as drafts, with a starter Name field. Refused (409) if the screens or the table already exist |
 | `GET /factory/tables` | tables published screens use |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |
 | `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields) |
