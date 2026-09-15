@@ -34,11 +34,11 @@ var factory = require('@xeplr/factory')
 await factory.init({ knex: appKnex })               // the app database — the entity tables live here
 // or: await factory.init({ database: 'myapp', connection: process.env.APP_CONNECTION })
 
-app.use(factory.router({ auth: auth.mtMembershipGate }))
-// or per area: factory.router({ auth: { view, write, design } })
+app.use(factory.router({ access: true, auth: auth.mtMembershipGate }))
+// or per area: factory.router({ access: true, auth: { view, write, design } })
 ```
 
-Mount it after `mtMiddleware()`: every query is scoped to the request's tenant (`mtId1…`), exactly like `BaseModel`.
+Mount it after `mtMiddleware()`: every query is scoped to the request's tenant (`mtId1…`), exactly like `BaseModel`. An app without tenancy (no `registerMTs`) gets no tenant filter.
 
 Once:
 
@@ -46,7 +46,23 @@ Once:
 DB_FACTORY=myapp xeplr-factory-migrate up        # creates factory_screens
 ```
 
-and add `node_modules/@xeplr/factory/migrations-auth` to `XEPLR_AUTH_MIGRATIONS` for the route permissions (`factory:view`, `factory:write`, `factory:design`).
+or, in an app that runs its own migrations, put `factory.migrationsDir` first in its `sqlMigrator.up`. Add `factory.authMigrationsDir` (`node_modules/@xeplr/factory/migrations-auth`) to `XEPLR_AUTH_MIGRATIONS` for the route permissions.
+
+### Access
+
+Every route is a row in the auth database's `apis` catalog — `factory:view` (screens, records, options), `factory:write` (save, delete records), `factory:design` (drafts, **publish — which changes tables**) — granted to Super Admin and CompanyAdmin (all), Creator (view, write) and Viewer (view).
+
+With `{ access: true }` each route answers only a caller whose `req.access.apis` (put on the request by the auth gate, from `/auth/api/me`) names it; anyone else gets 403 `Access denied: Publish factory screen`. A request with no `req.access` at all is refused too — the router is then mounted where no gate ran. The names are `factory.API_NAMES`.
+
+Access is per route, not yet per screen or table: whoever may save records may save them on any published screen.
+
+### The screens an app ships with
+
+```js
+await factory.publishScreens([require('./screens/task/task-edit.screen.json'), require('./screens/task/task-list.screen.json')])
+```
+
+At startup: publishes each screen that has **no published version yet** — creating its table — and leaves the rest alone, so a restart never puts a file back over a design someone has since changed. Ordered for you (a table before the dropdowns that point at it, lists last). Published for every tenant (`'*'`); a company's own later version wins for that company.
 
 ## A new entity, start to finish
 

@@ -12,7 +12,8 @@
 // Before first use: `xeplr-factory-migrate up` (creates factory_screens), and
 // the access rows in migrations-auth/.
 
-var { getConnection } = require('@xeplr/db');
+var path = require('path');
+var { getConnection, getMtConfig, runWithMt } = require('@xeplr/db');
 var createFactoryRouter = require('./lib/router');
 var { createScreensStore } = require('./lib/screens');
 var { createRecordsStore } = require('./lib/records');
@@ -58,9 +59,86 @@ function router(options) {
   return createFactoryRouter(stores(), options);
 }
 
+/**
+ * Publish the screens an app ships with — its starting designs — the first
+ * time it runs.
+ *
+ * ONLY screens with no published version are published. Once a person has
+ * refined a screen in the designer, the database is the design and the file is
+ * history, so a restart never puts the file back over their work.
+ *
+ * Shared by every tenant: published with '*' in each tenancy level, so every
+ * company starts from the same screens (a company's own later version wins
+ * for that company). Ordered so a table is created before a dropdown points
+ * at it, and a list after the form whose table it shows.
+ *
+ * @param documents  screen documents, in any order
+ * @param options.user  who to record as the publisher (default { id: 'system' })
+ * @returns {{ published: string[], kept: string[] }}
+ */
+async function publishScreens(documents, options) {
+  var s = stores();
+  var user = (options && options.user) || { id: 'system' };
+  var model = await require('./lib/model').load();
+  var cfg = getMtConfig();
+  var everyone = {};
+  if (cfg.enabled) for (var level = 1; level <= cfg.levels; level++) everyone['mtId' + level] = '*';
+
+  var ordered = orderForPublish(documents || [], model);
+  return runWithMt(everyone, async function() {
+    var result = { published: [], kept: [] };
+    for (var i = 0; i < ordered.length; i++) {
+      var doc = ordered[i];
+      if (await s.screens.published(doc.id)) { result.kept.push(doc.id); continue; }
+      await s.screens.saveDraft(doc.id, doc, user);
+      try {
+        await s.records.publish(doc.id, {}, user);
+      } catch (err) {
+        err.message = 'Could not publish screen "' + doc.id + '": ' + err.message;
+        throw err;
+      }
+      result.published.push(doc.id);
+    }
+    return result;
+  });
+}
+
+/** Forms whose table others point at first, forms next, lists (no fields) last. */
+function orderForPublish(documents, model) {
+  var forms = documents.filter(function(d) { return d.source && model.inputNodes(d).length; });
+  var rest = documents.filter(function(d) { return forms.indexOf(d) === -1; });
+  var bySource = {};
+  forms.forEach(function(d) { bySource[d.source] = d; });
+  var done = [];
+  var visiting = new Set();
+  function visit(d) {
+    if (done.indexOf(d) !== -1 || visiting.has(d)) return;     // a cycle is published in file order
+    visiting.add(d);
+    model.inputNodes(d).forEach(function(n) {
+      var data = n.props && n.props.data;
+      if (data && data.source === 'table' && bySource[data.table] && bySource[data.table] !== d) visit(bySource[data.table]);
+    });
+    done.push(d);
+  }
+  forms.forEach(visit);
+  return done.concat(rest);
+}
+
 /** Add or replace one screen's hooks after init. */
 function registerHooks(screenId, hooks) {
   stores().hooks.register(screenId, hooks);
 }
 
-module.exports = { requiredEnv: requiredEnv, init: init, router: router, stores: stores, registerHooks: registerHooks };
+module.exports = {
+  requiredEnv: requiredEnv,
+  init: init,
+  router: router,
+  stores: stores,
+  registerHooks: registerHooks,
+  publishScreens: publishScreens,
+  // For an app that runs migrations itself: factory_screens into its own
+  // database, and the access rows into the auth database (XEPLR_AUTH_MIGRATIONS).
+  migrationsDir: path.join(__dirname, 'migrations'),
+  authMigrationsDir: path.join(__dirname, 'migrations-auth'),
+  API_NAMES: createFactoryRouter.API_NAMES
+};
