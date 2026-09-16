@@ -105,8 +105,11 @@ The database user needs permission to create and alter tables in the app databas
 | dropdown / radio with fixed options | `varchar(50)` |
 | multi-select | `text` — every chosen id, joined by commas |
 | file | `varchar(255)` — the stored file's path, not its bytes |
+| stepper, label | **no column** — they hold no value |
 
 Plus every xeplr table's `id`, `isActive`, `mtId1–4`, `recordCreated/Modified Date/By`. A table a dropdown, radio or multi-select reads needs an `id` and a `name` column.
+
+A **stepper** is a way through one form, not several forms. The step a field sits on is `node.step` beside its `x/y/w/h` — nothing a table knows about — so every field is a column, is checked and is saved whichever step is showing, including a step nobody opened. Holding back at a step until its own fields are filled in is the browser's job; a save that arrives without a required field on a later step is refused here like any other, naming that field.
 
 **Two of them do not go into their column as they are read**, and the conversion is `@xeplr/ui-factory`'s (`toDbValue` / `fromDbValue`), so the browser and the server cannot drift apart:
 
