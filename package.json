@@ -42,9 +42,16 @@
     "@xeplr/utils": "^1.0.0"
   },
   "peerDependencies": {
-    "express": "^4.0.0 || ^5.0.0"
+    "express": "^4.0.0 || ^5.0.0",
+    "multer": "^2.3.0"
+  },
+  "peerDependenciesMeta": {
+    "multer": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "express": "^5.2.0"
+    "express": "^5.2.0",
+    "multer": "^2.3.1"
   }
 }

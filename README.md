@@ -56,6 +56,8 @@ With `{ access: true }` each route answers only a caller whose `req.access.apis`
 
 Access is per route, not yet per screen or table: whoever may save records may save them on any published screen.
 
+The two file routes add no rows of their own: a file field's value is a record's value, so uploading one is `Save factory record` and reading it back is `Get factory record`. Nothing new to migrate.
+
 ### The screens an app ships with
 
 ```js
@@ -97,11 +99,45 @@ The database user needs permission to create and alter tables in the app databas
 | textarea | `text` |
 | number | `integer` if whole numbers only, else `numeric` |
 | date | `date` |
+| date & time | `timestamp` |
 | checkbox | `boolean NOT NULL DEFAULT false` |
-| dropdown from a table | `varchar(25) REFERENCES "<table>"("id")` — a real foreign key |
-| dropdown with fixed options | `varchar(50)` |
+| dropdown / radio from a table | `varchar(25) REFERENCES "<table>"("id")` — a real foreign key |
+| dropdown / radio with fixed options | `varchar(50)` |
+| multi-select | `text` — every chosen id, joined by commas |
+| file | `varchar(255)` — the stored file's path, not its bytes |
 
-Plus every xeplr table's `id`, `isActive`, `mtId1–4`, `recordCreated/Modified Date/By`. A table used by a dropdown needs an `id` and a `name` column.
+Plus every xeplr table's `id`, `isActive`, `mtId1–4`, `recordCreated/Modified Date/By`. A table a dropdown, radio or multi-select reads needs an `id` and a `name` column.
+
+**Two of them do not go into their column as they are read**, and the conversion is `@xeplr/ui-factory`'s (`toDbValue` / `fromDbValue`), so the browser and the server cannot drift apart:
+
+| | on the wire | in the column |
+|---|---|---|
+| multi-select | `["soil", "water"]` | `soil,water` — one column, so an option id may not contain a comma |
+| date & time | `"2026-10-01T09:30"` | `timestamp`, read back **as text**, like a `date`: no timezone may move the moment that was typed in |
+
+A choice from a **fixed** list is checked against that list on the server too — `@xeplr/schema-handler`'s `options` compares one value, so it covers a dropdown and a radio but cannot check a multi-select's array. An id nobody offered is 400, naming the field. Options that come from a table are left to the column's foreign key.
+
+## Files
+
+A **file** field stores one thing in its column: the path the upload answered with. The bytes live under `filesDir`, in a folder per company and per table:
+
+```
+<filesDir>/<mtId1 or 'shared'>/<table>/<id>__<name>       c1/surveys/9f3c…__Field_notes.txt
+```
+
+The id in front keeps two people's `scan.pdf` apart; the name after `__` is what the form shows and what the download is called (`fileLabel()` in `@xeplr/ui-factory` reads it, on both sides). A name is reduced to letters, digits, dot, dash and underscore — nothing that could become a directory of its own.
+
+```js
+await factory.init({ knex: appKnex, filesDir: '/var/lib/myapp/files' })
+```
+
+`filesDir` defaults to `FACTORY_FILES_DIR`, and without one to `./uploads/factory`. Uploading needs **`multer`** (`npm i multer`) — an optional peer, loaded on the first upload, so an app with no file fields never installs it.
+
+**The field's own rules decide, and the extension is the authority.** `POST /factory/files/:key/:field` looks the screen up, finds that `file` field, and checks the file against *its* `accept` (a list of extensions) and `maxSize` (megabytes) — 400 either way, with the field's label in the message. A browser's content type is the sender's word for it and is not consulted at all. Anything refused is deleted, not left in a corner of the disk.
+
+**Nothing is served from the disk.** There is no static directory: the only way back out is `GET /factory/files/<path>`, behind the same guard as reading a record. The path is resolved inside `filesDir` and anything that climbs out of it is refused (400); a path with nothing at it is 404. **A file in another company's folder is 404 as well** — the folder is the same `mtId1` the rows are scoped by, so a path is not a permission just because someone has it.
+
+One limit worth knowing: within a company the route checks **access, not ownership** — a caller who may read that table's records may fetch any of its stored paths. And a file whose record is deleted, or whose value is replaced, stays on disk; tidying those up is the app's to schedule.
 
 ## Hooks
 
@@ -222,6 +258,8 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `GET /factory/records/:key/:id` | one record — what Edit opens |
 | `POST /factory/records/:key/save` | `{ id?, values }` → create or update; 422 with `fields` if a rule or a hook's `reject` fails |
 | `POST /factory/records/:key/delete` | `{ id }` → `isActive = false` |
+| `POST /factory/files/:key/:field` | one file (multipart, field `file`) for that screen's file field → `{ path, name, size }`; `path` is what the column stores |
+| `GET /factory/files/<path>` | that file back, under the name it was uploaded with |
 
 **What a request can reach:** table and column names come only from a published screen, and are checked against the table's real columns before any query. A request names a screen — never a table or a column. Values go through `@xeplr/schema-handler`'s `applySchema` with the screen's own rules, so the server accepts exactly what the form does.
 

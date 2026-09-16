@@ -17,6 +17,7 @@ var { getConnection, getMtConfig, runWithMt } = require('@xeplr/db');
 var createFactoryRouter = require('./lib/router');
 var { createScreensStore } = require('./lib/screens');
 var { createRecordsStore } = require('./lib/records');
+var { createFilesStore } = require('./lib/files');
 var { createHooks } = require('./lib/hooks');
 var { createEntitiesStore } = require('./lib/entities');
 var { FactoryModel, createModels } = require('./lib/factoryModel');
@@ -34,6 +35,8 @@ var _stores = null;
  * @param config.connectionName  default 'factory'
  * @param config.hooks       { screenId: { save, get, delete } } — see lib/hooks.js
  * @param config.models      [TaskModel, …] — classes extending FactoryModel, see lib/factoryModel.js
+ * @param config.filesDir    where a file field's uploads are kept
+ *                           (default FACTORY_FILES_DIR, else ./uploads/factory)
  */
 async function init(config) {
   config = config || {};
@@ -49,7 +52,8 @@ async function init(config) {
   var screens = createScreensStore(_knex);
   var records = createRecordsStore(_knex, screens, hooks, models);
   var entities = createEntitiesStore(_knex, screens, records);
-  _stores = { screens: screens, records: records, hooks: hooks, entities: entities, models: models };
+  var files = createFilesStore(records, { filesDir: config.filesDir });
+  _stores = { screens: screens, records: records, hooks: hooks, entities: entities, models: models, files: files };
   return _stores;
 }
 
