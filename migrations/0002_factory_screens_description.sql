@@ -1,0 +1,16 @@
+-- 0002_factory_screens_description.sql
+--
+-- WHAT A FORM IS FOR, in the maker's own words.
+--
+-- When a lot of people can make forms, a lot of people make the same one.
+-- Three things called "Inspection", and the only way to tell them apart is to
+-- open each and read its fields — which says what it holds and never what it
+-- was for, or whether the one you are looking at is the one still in use.
+--
+-- Deciding which to keep needs two facts, and the table already has one of
+-- them: `recordCreatedBy` and `recordCreatedDate` say who made it and when,
+-- and were simply never shown. This adds the other.
+--
+-- A column rather than only a document field, copied out on save like `name`
+-- and `source` are, so a LISTING can show it without reading every document.
+ALTER TABLE "factory_screens" ADD COLUMN IF NOT EXISTS "description" varchar(500);

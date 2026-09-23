@@ -11,6 +11,7 @@ var knexLib = require('knex');
 var { registerMTs, runWithMt } = require('@xeplr/db');
 var factory = require('..');
 var { createModels } = require('../lib/factoryModel');
+var applyMigrations = require('./applyMigrations');
 
 var DB = 'xeplr_factory_table_' + process.pid;
 var admin, knex, server, base, model, skip = null;
@@ -44,7 +45,7 @@ before(async function() {
   await admin.raw('DROP DATABASE IF EXISTS ??', [DB]);
   await admin.raw('CREATE DATABASE ??', [DB]);
   knex = knexLib({ client: 'pg', connection: { database: DB } });
-  await knex.raw(fs.readFileSync(path.join(factory.migrationsDir, '0001_factory_screens.sql'), 'utf8'));
+  await applyMigrations(knex, factory.migrationsDir);
   registerMTs({ l1: { name: 'companyId', header: 'x-company-id' } });
   model = await import('@xeplr/ui-factory/model');
   await factory.init({ knex: knex, models: [NoteModel] });
