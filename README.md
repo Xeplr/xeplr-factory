@@ -84,7 +84,8 @@ Edit the draft and publish again. The table is compared with the screen **as the
 |---|---|
 | new field | `ADD COLUMN` |
 | wider (varchar 80 → 120, varchar → text, integer → numeric) | `ALTER COLUMN … TYPE` |
-| narrower, or a different kind of value | **refused** (409), nothing runs |
+| narrower, a foreign key moved, timestamp → date | **refused** (409), nothing runs |
+| a field that changed kind (text → number, date, yes/no; number → text; decimal → whole) | **a conversion.** Every saved value is checked first, across every company: if any will not fit, 409 with `wontFit: [{ column, from, to, failing, samples }]` and nothing runs. If all fit, it **asks first** (409 with `convert: [{ column, from, to, records }]`); publish again with `{ "confirmConvert": ["age"] }` to `ALTER … TYPE … USING`, blanks becoming NULL |
 | field removed | **asks first** (409 with `confirm: [{ column, records }]`); publish again with `{ "confirmDrop": ["phone"] }` to `DROP COLUMN` — the column and all its values, for every company |
 | a column no screen created, or one another company's screen still uses | never dropped (reported in `keep`) |
 | field renamed | field names that are already columns are **locked** in the designer (`lockedNames`) — a rename would drop the old column's data |
@@ -253,7 +254,7 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `GET /factory/screens` | every screen: latest published version, draft waiting? |
 | `GET /factory/screens/:key` | latest published (`?draft=true` for the draft), with `lockedNames` |
 | `PUT /factory/screens/:key/draft` | save the draft `{ document }` — refused (422) if it does not validate |
-| `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns |
+| `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns, `{ confirmConvert }` to allow converting them |
 | `POST /factory/entities` | a new form `{ key, label? }` — the key (`farming_department`) names the screens and the table and is fixed once published; the label is what people see: its list and edit screens as drafts, with a starter Name field. Refused (409) if the screens or the table already exist |
 | `GET /factory/tables` | tables published screens use |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |

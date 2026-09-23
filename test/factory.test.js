@@ -234,3 +234,63 @@ test('an entity: screens published, tables changed, records in real tables', asy
     assert.deepEqual(sql.rows[0], { isActive: false, recordModifiedBy: 'u1' });
   });
 });
+
+test('a field that changed kind: its column converts only when every saved value fits', async function(t) {
+  if (skip) { t.skip(skip); return; }
+
+  // Made as plain text on purpose — the mistake the designer lets you fix later.
+  var person = model.screensFromSpec({ entity: 'person', plural: 'people', fields: [
+    { label: 'Full name', required: true },
+    { label: 'Age', type: 'text' },
+    { label: 'Profile', type: 'text' }
+  ] });
+  for (var doc of [person.edit, person.list]) await call('PUT', '/factory/screens/' + doc.id + '/draft', { document: doc });
+  for (var key of ['person_edit', 'person_list']) assert.equal((await call('POST', '/factory/screens/' + key + '/publish')).status, 200);
+
+  var ids = [];
+  for (var values of [{ fullName: 'Ada', age: '36' }, { fullName: 'Grace', age: ' 41 ' }, { fullName: 'Blank', age: '' }, { fullName: 'Oops', age: 'forty' }]) {
+    var saved = await call('POST', '/factory/records/person_edit/save', { values: values });
+    assert.equal(saved.status, 200, saved.body.message);
+    ids.push(saved.body.dataArray[0].id);
+  }
+  await knex.raw('UPDATE people SET age = ? WHERE id = ?', ['', ids[2]]);   // an emptied box saved as ''
+
+  var ageId = person.edit.nodes.find(function(n) { return n.props.name === 'age'; }).id;
+  var profileId = person.edit.nodes.find(function(n) { return n.props.name === 'profile'; }).id;
+  var v2 = model.convertField(person.edit, ageId, 'age', undefined, { lockedNames: ['age', 'profile'] }).document;
+  v2 = model.convertField(v2, profileId, 'linkedin', undefined, { lockedNames: ['age', 'profile'] }).document;
+  assert.equal((await call('PUT', '/factory/screens/person_edit/draft', { document: v2 })).status, 200);
+
+  await t.test('a value that will not fit stops the publish, showing it; nothing changes', async function() {
+    var res = await call('POST', '/factory/screens/person_edit/publish', { confirmConvert: ['age'] });
+    assert.equal(res.status, 409);
+    assert.match(res.body.message, /"age" has 1 saved value that cannot become integer \("forty"\)/);
+    assert.deepEqual(res.body.dataArray[0].wontFit[0].samples, ['forty']);
+    var type = (await knex.raw("select udt_name from information_schema.columns where table_name = 'people' and column_name = 'age'")).rows[0].udt_name;
+    assert.equal(type, 'varchar');
+  });
+
+  await t.test('once it fits, publishing asks — then converts; blanks become empty', async function() {
+    await knex.raw('UPDATE people SET age = ? WHERE id = ?', ['40', ids[3]]);
+    var ask = await call('POST', '/factory/screens/person_edit/publish');
+    assert.equal(ask.status, 409);
+    assert.deepEqual(ask.body.dataArray[0].convert, [{ column: 'age', from: 'varchar(255)', to: 'integer', records: 4 }]);
+    assert.match(ask.body.message, /converts age \(varchar\(255\) → integer, 4 values\)/);
+
+    var ok = await call('POST', '/factory/screens/person_edit/publish', { confirmConvert: ['age'] });
+    assert.equal(ok.status, 200, ok.body.message);
+    var rows = (await knex.raw('select "fullName", age, profile from people order by "fullName"')).rows;
+    assert.deepEqual(rows.map(function(r) { return [r.fullName, r.age]; }), [['Ada', 36], ['Blank', null], ['Grace', 41], ['Oops', 40]]);
+    var cols = (await knex.raw("select column_name, udt_name, character_maximum_length as len from information_schema.columns where table_name = 'people' and column_name in ('age', 'profile') order by column_name")).rows;
+    assert.deepEqual(cols, [{ column_name: 'age', udt_name: 'int4', len: null }, { column_name: 'profile', udt_name: 'varchar', len: 300 }], 'LinkedIn stayed text: no question asked');
+  });
+
+  await t.test('the new kind is enforced on the server', async function() {
+    var bad = await call('POST', '/factory/records/person_edit/save', { values: { fullName: 'Z', age: 12.5, profile: 'https://example.com/z' } });
+    assert.equal(bad.status, 422);
+    var fields = bad.body.error.fields.map(function(f) { return f.field; }).sort();
+    assert.deepEqual(fields, ['age', 'profile']);
+    var good = await call('POST', '/factory/records/person_edit/save', { values: { fullName: 'Z', age: 30, profile: 'https://www.linkedin.com/in/z' } });
+    assert.equal(good.status, 200, good.body.message);
+  });
+});
