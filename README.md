@@ -256,9 +256,10 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `PUT /factory/screens/:key/draft` | save the draft `{ document }` — refused (422) if it does not validate |
 | `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns, `{ confirmConvert }` to allow converting them |
 | `POST /factory/entities` | a new form `{ key, label? }` — the key (`farming_department`) names the screens and the table and is fixed once published; the label is what people see: its list and edit screens as drafts, with a starter Name field. Refused (409) if the screens or the table already exist |
-| `GET /factory/tables` | tables published screens use |
+| `DELETE /factory/screens/:key` | remove a form. The design always goes; its table is dropped only when it is **empty** and no other screen reads it, otherwise it is kept and the answer says how many rows kept it. Refused while another form's dropdown points at the table, naming that form. Group `factory:design` (migration 0004) |
+| `GET /factory/tables` | tables a dropdown can point at: **masters first**, by the name people know them as ("Departments"), then every other table a published screen reads |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |
-| `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields) |
+| `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields). `?belongsTo=departmentId&belongsToId=<id>` returns only the rows whose column equals that id — a sub-table on a form. No id means **no rows**, never every row |
 | `GET /factory/records/:key/:id` | one record — what Edit opens |
 | `POST /factory/records/:key/save` | `{ id?, values }` → create or update; 422 with `fields` if a rule or a hook's `reject` fails |
 | `POST /factory/records/:key/delete` | `{ id }` → `isActive = false` |
@@ -266,6 +267,12 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `GET /factory/files/<path>` | that file back, under the name it was uploaded with |
 
 **What a request can reach:** table and column names come only from a published screen, and are checked against the table's real columns before any query. A request names a screen — never a table or a column. Values go through `@xeplr/schema-handler`'s `applySchema` with the screen's own rules, so the server accepts exactly what the form does.
+
+### Sub-tables, codes and masters
+
+- **A sub-table is one equality.** `belongsTo` names a column of the listed table; it is checked against the table's real columns, and the rows returned are those whose value equals `belongsToId` — the parent record's `id`. No general filter reaches the server: a query language nobody designed is a way to ask about anything.
+- **Codes are minted on the server, on the first save.** A field the screen marks as a generated code (`CMP-7K3QF9`, with its own prefix) is filled in here, once — a browser cannot be trusted to mint one, and a code that changed on edit could not be quoted. A **counted** identifier is the database's own identity column and is never written from here, on create or update.
+- **Masters** are forms marked `master` in the builder (Departments, statuses). They come first in `GET /factory/tables`, named, so a dropdown points at them by choice.
 
 ## In the browser
 
