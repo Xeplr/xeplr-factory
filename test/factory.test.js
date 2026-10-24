@@ -295,3 +295,53 @@ test('a field that changed kind: its column converts only when every saved value
     assert.equal(good.status, 200, good.body.message);
   });
 });
+
+test('a form inside a form: its own table, linked back, and kept from being deleted', async function(t) {
+  if (skip) { t.skip(skip); return; }
+
+  var member = model.screensFromSpec({ entity: 'member', fields: [{ label: 'Name', required: true }] });
+  var card = model.screensFromSpec({
+    entity: 'card',
+    fields: [
+      { label: 'Number', required: true },
+      { label: 'Member', type: 'dropdown', table: 'members', required: true }
+    ]
+  });
+  var hosted = model.addControl(member.edit, 'subform', { props: { title: 'Card', screen: 'card_edit', belongsTo: 'memberId' } }).document;
+
+  await t.test('the host publishes with the form inside it, and gains no column for it', async function() {
+    for (var doc of [member.edit, member.list, card.edit, card.list]) {
+      assert.equal((await call('PUT', '/factory/screens/' + doc.id + '/draft', { document: doc })).status, 200);
+    }
+    for (var key of ['member_edit', 'member_list', 'card_edit', 'card_list']) {
+      var res = await call('POST', '/factory/screens/' + key + '/publish');
+      assert.equal(res.status, 200, key + ': ' + res.body.message);
+    }
+    var before = (await knex.raw("select column_name from information_schema.columns where table_name = 'members'")).rows.length;
+    assert.equal((await call('PUT', '/factory/screens/member_edit/draft', { document: hosted })).status, 200);
+    var pub = await call('POST', '/factory/screens/member_edit/publish');
+    assert.equal(pub.status, 200, pub.body.message);
+    var after = (await knex.raw("select column_name from information_schema.columns where table_name = 'members'")).rows.length;
+    assert.equal(after, before, 'a subform is not a column of the host');
+  });
+
+  await t.test('its record is read back through the link, and only that one', async function() {
+    var ada = (await call('POST', '/factory/records/member_edit/save', { values: { name: 'Ada' } })).body.dataArray[0];
+    var bob = (await call('POST', '/factory/records/member_edit/save', { values: { name: 'Bob' } })).body.dataArray[0];
+    var saved = await call('POST', '/factory/records/card_edit/save', { values: { number: 'C-1', memberId: ada.id } });
+    assert.equal(saved.status, 200, saved.body.message);
+
+    var mine = await call('GET', '/factory/records/card_edit?belongsTo=memberId&belongsToId=' + ada.id);
+    assert.deepEqual(mine.body.dataArray.map(function(r) { return r.number; }), ['C-1']);
+    var theirs = await call('GET', '/factory/records/card_edit?belongsTo=memberId&belongsToId=' + bob.id);
+    assert.equal(theirs.body.dataArray.length, 0, 'another member\'s form is empty, not everybody\'s');
+  });
+
+  await t.test('a form shown inside another cannot be deleted, and says where it is shown', async function() {
+    var res = await call('DELETE', '/factory/screens/card_edit');
+    assert.equal(res.status, 400);
+    assert.match(res.body.message, /shows this form inside it.*member_edit/);
+    var still = await call('GET', '/factory/screens/card_edit');
+    assert.equal(still.status, 200, 'nothing was removed');
+  });
+});
