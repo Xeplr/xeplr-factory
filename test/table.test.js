@@ -14,7 +14,7 @@ var { createModels } = require('../lib/factoryModel');
 var applyMigrations = require('./applyMigrations');
 
 var DB = 'xeplr_factory_table_' + process.pid;
-var admin, knex, server, base, model, skip = null;
+var admin, knex, server, base, model, note, skip = null;
 
 class NoteModel extends factory.FactoryModel {
   static toDb(values) {
@@ -55,7 +55,7 @@ before(async function() {
   server = http.createServer(app);
   await new Promise(function(r) { server.listen(0, r); });
   base = 'http://127.0.0.1:' + server.address().port;
-  var note = model.screensFromSpec({ entity: 'note', fields: [{ label: 'Title', required: true }, { label: 'Tags', validation: { maxLength: 200 } }] });
+  note = model.screensFromSpec({ entity: 'note', fields: [{ label: 'Title', required: true }, { label: 'Tags', validation: { maxLength: 200 } }] });
   await factory.publishScreens([note.edit, note.list]);
 });
 
@@ -130,9 +130,13 @@ test('models and factory.table', async function(t) {
     assert.deepEqual(left.map(function(r) { return r.title; }), ['Soil']);
   });
 
-  await t.test('hooks get the same thing as ctx.db()', async function() {
+  await t.test('a screen\'s event functions get the same thing as ctx.db()', async function() {
     var seen = null;
-    factory.registerHooks('note_edit', { get: { after: async function(ctx) { seen = await ctx.db().count('* as n').first(); } } });
+    require('@xeplr/actions').register({ name: 'countNotes', event: 'beforeLoad', execute: async function(ctx) { seen = await ctx.db().count('* as n').first(); } });
+    var withEvent = Object.assign({}, note.edit, { events: { beforeLoad: 'countNotes' } });
+    assert.equal((await call('PUT', '/factory/screens/note_edit/draft', { document: withEvent })).status, 200);
+    var pub = await call('POST', '/factory/screens/note_edit/publish');
+    assert.equal(pub.status, 200, pub.body.message);
     await call('GET', '/factory/records/note_edit/' + (await knex.raw("select id from notes where title = 'Soil'")).rows[0].id);
     assert.equal(Number(seen.n), 1);
   });

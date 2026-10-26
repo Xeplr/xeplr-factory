@@ -18,7 +18,7 @@ Records are never stored as JSON. Every entity is an ordinary table your reports
 | Records | the entity's own table: `employees`, `departments`, … |
 | Creating and changing those tables | **Publish** — directly, in the publish transaction; dropping a column needs confirmation |
 | Forms, lists, the designer | `@xeplr/ui-factory` in the browser, talking to these routes |
-| Anything an entity needs beyond save / get / delete | its [hooks](#hooks) file |
+| Anything an entity needs beyond save / get / delete | functions named in the screen's [events](#events--the-apps-code-picked-by-name-in-the-screen) |
 
 ## Install
 
@@ -143,73 +143,69 @@ await factory.init({ knex: appKnex, filesDir: '/var/lib/myapp/files' })
 
 One limit worth knowing: within a company the route checks **access, not ownership** — a caller who may read that table's records may fetch any of its stored paths. And a file whose record is deleted, or whose value is replaced, stays on disk; tidying those up is the app's to schedule.
 
-## Hooks
+## Events — the app's code, picked by name in the screen
 
-The generic routes save, read and delete a screen's records. When an entity needs more — a code worked out on save, an email after, a list only managers see — give its screen **hooks**: three operations, four hooks each.
+When an entity needs more than the generic save — a code worked out on save, an email after, a list only managers see — write a **function**, register it with `@xeplr/actions` under the **event** it is for, and name it in the screen:
 
 ```js
-// src/screens/employee/employee.hooks.js — `xeplr-factory screens` writes an empty one
-module.exports = {
-  save: {
-    before: async function(ctx) {
-      if (ctx.values.endDate < ctx.values.startDate) ctx.reject('Ends before it starts', { field: 'endDate' })
-      return Object.assign({}, ctx.values, { employeeCode: ctx.values.employeeCode.toUpperCase() })
-    },
-    after: async function(ctx) { if (ctx.isNew) await mail.welcome(ctx.result) },
-    error: async function(ctx, err) { log.warn('employee not saved', err) }
-  },
-  get: {
-    before: function(ctx) { if (!ctx.user.isManager) ctx.query.where('employees.departmentId', ctx.user.departmentId) }
-  },
-  delete: {
-    before: function(ctx) { if (ctx.previous.isFounder) ctx.reject('Founders cannot be deleted') }
+// functions/employees.js — loaded once at startup
+var { register } = require('@xeplr/actions')
+
+register({
+  name: 'checkSalaryBand', event: 'beforeSave',
+  description: 'Refuses a salary outside the grade band',
+  execute: function(ctx) {
+    if (ctx.values.salary > 200000) ctx.reject('Above the band for this grade', { field: 'salary' })
+    return Object.assign({}, ctx.values, { employeeCode: String(ctx.values.employeeCode).toUpperCase() })
   }
-}
+})
+register({ name: 'notifyHR', event: 'afterSave', execute: async function(ctx) { if (ctx.isNew) await mail.welcome(ctx.result) } })
+register({ name: 'ownDepartmentOnly', event: 'beforeLoad', execute: function(ctx) { if (!ctx.user.isManager) ctx.query.where('employees.departmentId', ctx.user.departmentId) } })
 ```
 
-```js
-await factory.init({ knex: appKnex, hooks: { employee_edit: require('./screens/employee/employee.hooks') } })
-// or later: factory.registerHooks('employee_edit', require('./screens/employee/employee.hooks'))
+```json
+"events": { "beforeSave": "checkSalaryBand", "afterSave": "notifyHR", "beforeLoad": "ownDepartmentOnly" }
 ```
 
-Hooks are registered by screen id. A **list screen uses the hooks of the screen it edits in**, so one file covers the entity. A misspelt operation or hook (`beforeSave`, `onSaved`) fails at startup rather than silently never running.
+The designer offers each event the functions written for it (`GET /factory/functions`); a screen saved by hand or by Claude names them the same way.
 
-| operation | covers | the generic work |
-|---|---|---|
-| `save` | create and update | the screen's rules, then insert / update in a transaction, then read the row back |
-| `get` | the list, and one record (`ctx.id` set, `GET /factory/records/:key/:id`) | a select scoped to the tenant and to active rows |
-| `delete` | delete | `isActive = false` |
+| event | runs | `ctx` adds | return |
+|---|---|---|---|
+| `beforeLoad` | before the list, and one record for Edit, are read | `query` (knex — narrow it), `id` / `many` | nothing, or a new query |
+| `beforeSave` | before create and update — the screen's rules then check what it returns | `values`, `isNew`, `previous` (update) | the values to save, or nothing |
+| `afterSave` | once saved | `result` (the saved row) | ignored. If it throws, the save **still happened**: it is logged and `onError` is told |
+| `beforeDelete` | before a delete (`isActive = false`) | `previous` | nothing |
+| `onError` | when loading, saving or deleting failed | `error` | ignored — the original error is still the response |
 
-Each operation runs, without an override:
+Anywhere, `ctx.reject(message, { field })` stops with a 422 whose message the form shows **on that field**.
 
-1. **`before(ctx)`** — first. On **save**, return an object to replace `ctx.values`; the screen's rules then check the result, so a hook can fix up what the person typed. On **get**, narrow `ctx.query` (a knex builder) or return a new one. Anywhere, `ctx.reject(message, { field })` stops with a 422 whose message the form shows **on that field**.
-2. **the generic work** above.
-3. **`after(ctx)`** — once it succeeded; `ctx.id` and `ctx.result` are set. Return a value to replace the response. If `after` throws, the operation has **still happened** — the error is logged, `error` is told, and the plain result is returned.
-4. **`error(ctx, err)`** — when anything above failed. For telling someone; the original error is still the response.
+**The rules:**
 
-**`override(ctx)`** is the whole operation instead. When a screen has one, **nothing generic runs** for that operation — no rules, no `before`, no query, no `after`, no `error`. What it returns is the response; what it throws (with `status`) is the error.
+- **One way.** The screen is the one place that says what runs — one function per event, named there. There are no hook files beside it.
+- **Every event runs on the server.** A rule in the browser is one a person can skip.
+- **A list screen runs the events of the screen it edits in**, so one set covers an entity.
+- **Nothing fails quietly.** Publishing refuses a screen that names a function nobody registered, or one written for another event — by name (422, `body.missingFunctions`). A function that later stops being registered fails the operation with its name (500), rather than saving without its rule.
+- `@xeplr/actions` (`^1.4.0`) is a **peer** dependency: the app's one registry, shared with `@xeplr/workflow-engine`, whose flows pick `decide` functions from it the same way. An app whose screens name no functions does not need it.
 
-`ctx` holds:
+`ctx` always holds:
 
 | field | |
 |---|---|
 | `op`, `screenKey`, `screen`, `table` | what is running, and the published screen |
 | `user`, `tenant` | `req.user` and the request's `mtId1…` |
 | `knex` | the app database — for your own queries |
+| `db()` | `factory.table()` on this form's table: this company, active rows, audit, the model |
 | `input` | what the UI sent, read-only |
 | `id` | the record; `null` for a new record or a list |
-| `isNew` | save: creating |
-| `values` | save: the values being saved — replace them by returning an object from `before` |
-| `previous` | save (update) and delete: the row as it was |
-| `many`, `query` | get: a list or one record; the select `before` may narrow |
-| `result` | after: the saved row, the rows, or `{ id }` |
-| `reject(message, { field })` | stop with a message on a field |
+| `reject(message, { field })` | refuse, with the message on a field |
 
-**Columns a hook may set.** `save.before` may add columns the form does not have (`fullName` worked out from two fields) — they must be real columns of the table and not standard ones (`id`, `mtId1`, audit columns). Keys the **UI** sends that are not fields of the screen are always dropped, so a request cannot write a column the form does not show.
+### From 1.x
+
+1.x attached **hook files** per screen (`init({ hooks })`, `registerHooks`, `save.before` / `get.after` / `override`). 2.0 removes them, and passing them **stops startup** with a message saying so — a rule that silently stopped running would be worse. Move each hook into a registered function and name it in the screen's events: `save.before` → `beforeSave`, `save.after` → `afterSave`, `get.before` → `beforeLoad`, `delete.before` → `beforeDelete`, `error` → `onError`. `get.after` and `override` have no event: shape a record with the table's model (`FactoryModel`) instead.
 
 ## Models
 
-How a form's values are shaped between your code and its table — like Sequelize's getters and setters. One file per form, next to its hooks (`api/screens/task/task.model.js`):
+How a form's values are shaped between your code and its table — like Sequelize's getters and setters. One file per form (`api/screens/task/task.model.js`):
 
 ```js
 var { FactoryModel } = require('@xeplr/factory')
@@ -227,10 +223,10 @@ class TaskModel extends FactoryModel {
   static fromDb(row) { return super.fromDb(row) }
 }
 
-await factory.init({ knex, hooks, models: [TaskModel] })     // or factory.registerModel(TaskModel)
+await factory.init({ knex, models: [TaskModel] })     // or factory.registerModel(TaskModel)
 ```
 
-Every path uses it: the screens' routes (setters after `save.before` and before the screen's rules; getters before `get.after`) and `factory.table()`. A table with no model is left as it is. **Models shape data; hooks decide behaviour.**
+Every path uses it: the screens' routes (setters after `beforeSave` and before the screen's rules; getters as records are read) and `factory.table()`. A table with no model is left as it is. **Models shape data; events decide behaviour.**
 
 ## Your own queries: `factory.table()`
 
@@ -257,6 +253,7 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns, `{ confirmConvert }` to allow converting them |
 | `POST /factory/entities` | a new form `{ key, label? }` — the key (`farming_department`) names the screens and the table and is fixed once published; the label is what people see: its list and edit screens as drafts, with a starter Name field. Refused (409) if the screens or the table already exist |
 | `DELETE /factory/screens/:key` | remove a form. The design always goes; its table is dropped only when it is **empty** and no other screen reads it, otherwise it is kept and the answer says how many rows kept it. Refused while another form's dropdown points at the table, or while another form shows it inside itself (a subform), naming that form. Group `factory:design` (migration 0004) |
+| `GET /factory/functions` | the app's registered functions a screen's events (and a flow's `decide`) can pick: `[{ name, event, description }]`, never code. Group `factory:design` (migration 0005) |
 | `GET /factory/tables` | tables a dropdown can point at: **masters first**, by the name people know them as ("Departments"), then every other table a published screen reads |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |
 | `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields). `?belongsTo=departmentId&belongsToId=<id>` returns only the rows whose column equals that id — a sub-table on a form. No id means **no rows**, never every row |
