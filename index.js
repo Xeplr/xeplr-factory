@@ -34,8 +34,9 @@ var _stores = null;
  * @param config.connection  its connection (encrypted string or { host, port, user, password })
  * @param config.connectionName  default 'factory'
  * @param config.models      [TaskModel, …] — classes extending FactoryModel, see lib/factoryModel.js
- * @param config.filesDir    where a file field's uploads are kept
- *                           (default FACTORY_FILES_DIR, else ./uploads/factory)
+ *
+ * A file field's uploads are kept in each tenant's own folder under
+ * XEPLR_DATA_DIR (@xeplr/actions' requiredEnv), in screens/. `filesDir` is gone.
  */
 async function init(config) {
   config = config || {};
