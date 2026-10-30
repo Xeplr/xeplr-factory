@@ -39,12 +39,12 @@
     "@xeplr/db": "^1.0.0",
     "@xeplr/schema-handler": "^1.0.5",
     "@xeplr/ui-factory": "^1.5.0",
-    "@xeplr/utils": "^1.0.0"
+    "@xeplr/utils": "^1.1.0"
   },
   "peerDependencies": {
     "express": "^4.0.0 || ^5.0.0",
     "multer": "^2.3.0",
-    "@xeplr/actions": "^1.4.0"
+    "@xeplr/actions": "^2.0.0"
   },
   "peerDependenciesMeta": {
     "multer": {
@@ -57,6 +57,6 @@
   "devDependencies": {
     "express": "^5.2.0",
     "multer": "^2.3.1",
-    "@xeplr/actions": "^1.4.0"
+    "@xeplr/actions": "^2.0.0"
   }
 }

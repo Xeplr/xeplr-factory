@@ -13,12 +13,16 @@ var path = require('node:path');
 var http = require('node:http');
 var express = require('express');
 var knexLib = require('knex');
-var { registerMTs, runWithMt } = require('@xeplr/db');
+var { registerMTs, runWithMt, registerApplication } = require('@xeplr/db');
 var factory = require('..');
 var applyMigrations = require('./applyMigrations');
 
 var DB = 'xeplr_factory_files_' + process.pid;
-var FILES = path.join(os.tmpdir(), 'xeplr-factory-files-' + process.pid);
+// The data root an app sets: each company's screen files are in its own
+// <root>/<app>/<company>/screens folder.
+var DATA = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'xeplr-factory-data-')));
+process.env.XEPLR_DATA_DIR = DATA;
+var FILES = path.join(DATA, 'xeplr-factory-test', 'c1', 'screens');
 var admin, knex, server, base, model, skip = null;
 
 async function call(method, url, body, company) {
@@ -45,9 +49,11 @@ before(async function() {
   await admin.raw('CREATE DATABASE ??', [DB]);
   knex = knexLib({ client: 'pg', connection: { database: DB } });
   await applyMigrations(knex, factory.migrationsDir);
+  registerApplication('xeplr-factory-test');
   registerMTs({ l1: { name: 'companyId', header: 'x-company-id' } });
   model = await import('@xeplr/ui-factory/model');
-  await factory.init({ knex: knex, filesDir: FILES });
+  await assert.rejects(factory.init({ knex: knex, filesDir: '/somewhere' }), /filesDir is gone/);
+  await factory.init({ knex: knex });
   var app = express();
   app.use(function(req, res, next) { req.user = { id: 'u1' }; runWithMt({ mtId1: req.headers['x-company-id'] }, next); });
   app.use(factory.router());
@@ -129,14 +135,14 @@ test('multi-select, date-and-time, and files', async function(t) {
 
   var stored;
 
-  await t.test('an upload is kept per company and per table, under its own name', async function() {
+  await t.test('an upload is kept in its company\'s own folder, per table, under its own name', async function() {
     var res = await upload('/factory/files/survey_edit/report', 'Field notes (May).txt', 'sun and rain\n', 'text/plain');
     assert.equal(res.status, 200, JSON.stringify(res.body));
     stored = res.body.dataArray[0];
     assert.equal(stored.name, 'Field notes (May).txt', 'the name the person gave it');
     assert.equal(stored.size, 13);
     // Spaces and brackets are not in a path this app writes, so they are not.
-    assert.match(stored.path, /^c1\/surveys\/[A-Za-z0-9]+__Field_notes_May_\.txt$/, stored.path);
+    assert.match(stored.path, /^surveys\/[A-Za-z0-9]+__Field_notes_May_\.txt$/, stored.path);
     assert.equal(fs.readFileSync(path.join(FILES, stored.path), 'utf8'), 'sun and rain\n');
 
     var saved = await call('POST', '/factory/records/survey_edit/save', { id: id, values: { title: 'Spring', report: stored.path } });
@@ -150,13 +156,15 @@ test('multi-select, date-and-time, and files', async function(t) {
     assert.match(res.headers.get('content-disposition'), /attachment; filename="Field_notes_May_\.txt"/, 'the name after the id, not the id');
     assert.equal(await res.text(), 'sun and rain\n');
 
-    var missing = await fetch(base + '/factory/files/c1/surveys/nothing__here.txt', { headers: { 'x-company-id': 'c1' } });
+    var missing = await fetch(base + '/factory/files/surveys/nothing__here.txt', { headers: { 'x-company-id': 'c1' } });
     assert.equal(missing.status, 404);
   });
 
   await t.test('another company cannot fetch the file, path or no path', async function() {
     var other = await fetch(base + '/factory/files/' + stored.path, { headers: { 'x-company-id': 'c2' } });
-    assert.equal(other.status, 404, 'the same path, from another company');
+    assert.equal(other.status, 404, 'the same path, from another company, names nothing in its folder');
+    var climb = await fetch(base + '/factory/files/..%2f..%2fc1%2fscreens%2f' + encodeURIComponent(stored.path), { headers: { 'x-company-id': 'c2' } });
+    assert.equal(climb.status, 400, 'and climbing to it is refused');
     // The folder is the line: its own company still gets it.
     var ours = await fetch(base + '/factory/files/' + stored.path, { headers: { 'x-company-id': 'c1' } });
     assert.equal(ours.status, 200);

@@ -123,23 +123,19 @@ A choice from a **fixed** list is checked against that list on the server too �
 
 ## Files
 
-A **file** field stores one thing in its column: the path the upload answered with. The bytes live under `filesDir`, in a folder per company and per table:
+A **file** field stores one thing in its column: the path the upload answered with. The bytes live in the folder of the tenant the request is for, under **`XEPLR_DATA_DIR`** (required — `@xeplr/actions`' `requiredEnv`; the app calls `registerApplication()`), in `screens/`, a folder per table:
 
 ```
-<filesDir>/<mtId1 or 'shared'>/<table>/<id>__<name>       c1/surveys/9f3c…__Field_notes.txt
+<XEPLR_DATA_DIR>/<app>/<mtId1>/<mtId2>/screens/<table>/<id>__<name>     column: surveys/9f3c…__Field_notes.txt
 ```
 
 The id in front keeps two people's `scan.pdf` apart; the name after `__` is what the form shows and what the download is called (`fileLabel()` in `@xeplr/ui-factory` reads it, on both sides). A name is reduced to letters, digits, dot, dash and underscore — nothing that could become a directory of its own.
 
-```js
-await factory.init({ knex: appKnex, filesDir: '/var/lib/myapp/files' })
-```
-
-`filesDir` defaults to `FACTORY_FILES_DIR`, and without one to `./uploads/factory`. Uploading needs **`multer`** (`npm i multer`) — an optional peer, loaded on the first upload, so an app with no file fields never installs it.
+**From 2.x (3.0.0):** `filesDir` and `FACTORY_FILES_DIR` are gone — `init()` refuses `filesDir`, because a folder named for the app puts every company's files side by side. Uploading needs **`multer`** (`npm i multer`) — an optional peer, loaded on the first upload, so an app with no file fields never installs it.
 
 **The field's own rules decide, and the extension is the authority.** `POST /factory/files/:key/:field` looks the screen up, finds that `file` field, and checks the file against *its* `accept` (a list of extensions) and `maxSize` (megabytes) — 400 either way, with the field's label in the message. A browser's content type is the sender's word for it and is not consulted at all. Anything refused is deleted, not left in a corner of the disk.
 
-**Nothing is served from the disk.** There is no static directory: the only way back out is `GET /factory/files/<path>`, behind the same guard as reading a record. The path is resolved inside `filesDir` and anything that climbs out of it is refused (400); a path with nothing at it is 404. **A file in another company's folder is 404 as well** — the folder is the same `mtId1` the rows are scoped by, so a path is not a permission just because someone has it.
+**Nothing is served from the disk.** There is no static directory: the only way back out is `GET /factory/files/<path>`, behind the same guard as reading a record. The path is resolved inside the **reader's own** `screens/` folder and anything that climbs out of it is refused (400); a path with nothing at it is 404. **Another company's path is 404 as well** — it is read in this company's folder, where it names nothing — so a path is not a permission just because someone has it.
 
 One limit worth knowing: within a company the route checks **access, not ownership** — a caller who may read that table's records may fetch any of its stored paths. And a file whose record is deleted, or whose value is replaced, stays on disk; tidying those up is the app's to schedule.
 
