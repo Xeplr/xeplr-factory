@@ -212,6 +212,7 @@ registered with `@xeplr/actions` and an `event` saying what it is for:
 - **The record decides.** A button acts on one record of the screen's table (`source`), read here — this company, active rows; another company's id is 404. Its `when` / `disabledWhen` are checked again on that row, so a hidden or greyed-out button pressed by hand is refused (409, "does not apply to this record now").
 - **Runs through `runAction`**, so `inputSchema` checks the parameters exactly as a job or a workflow step's are (`options` = values allowed). `reject(message, { field })` refuses with a 422 like a form rule.
 - **Publishing checks them.** A screen whose controls name a function nobody registered, one registered for another event, or a button whose parameters its function does not take (one it does not take, a required one missing, a value outside `options`, a note it has no input for) is refused, saying which (`body.missingFunctions`, each with `at`: `nodes[2].props.buttons[1].action`).
+- Needs `@xeplr/ui-factory` **1.8.4** or later — the model that knows buttons and function-fed lists.
 - `GET /factory/functions` lists each function's `inputSchema` (names, types, `required`, `options`, descriptions — never code), so the designer offers a button's parameters.
 
 ### From 1.x
