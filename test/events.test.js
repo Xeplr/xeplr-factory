@@ -112,10 +112,10 @@ test('events', async function(t) {
     var res = await call('GET', '/factory/functions');
     assert.equal(res.status, 200, res.body.message);
     var byName = Object.fromEntries(res.body.dataArray.map(function(f) { return [f.name, f]; }));
-    assert.deepEqual(byName.cleanEmployee, { name: 'cleanEmployee', event: 'beforeSave', description: 'Upper-cases the code; refuses one name' });
+    assert.deepEqual(byName.cleanEmployee, { name: 'cleanEmployee', event: 'beforeSave', description: 'Upper-cases the code; refuses one name', inputSchema: [] });
     assert.equal(byName.routeOnward.event, 'decide', 'a flow\'s decide functions are listed too');
     assert.ok(!byName.sendEmail, 'a workflow step is not offered to a screen');
-    assert.ok(res.body.dataArray.every(function(f) { return Object.keys(f).join() === 'name,event,description'; }));
+    assert.ok(res.body.dataArray.every(function(f) { return Object.keys(f).join() === 'name,event,description,inputSchema'; }));
   });
 
   await t.test('a screen naming a function nobody registered is refused at publish, by name', async function() {

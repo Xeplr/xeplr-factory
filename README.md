@@ -58,6 +58,8 @@ Access is per route, not yet per screen or table: whoever may save records may s
 
 The two file routes add no rows of their own: a file field's value is a record's value, so uploading one is `Save factory record` and reading it back is `Get factory record`. Nothing new to migrate.
 
+The functions a screen's controls name have two rows (migration 0006): `List factory rows` (`factory:view` — a list's worked-out rows and a cell's hover box, to everyone who reads records) and `Press factory button` (`factory:write` — to everyone who writes them). What a button may then do is its function's to decide: it is given the caller.
+
 ### The screens an app ships with
 
 ```js
@@ -195,6 +197,23 @@ Anywhere, `ctx.reject(message, { field })` stops with a 422 whose message the fo
 | `id` | the record; `null` for a new record or a list |
 | `reject(message, { field })` | refuse, with the message on a field |
 
+## Buttons and worked-out lists — functions a screen's controls name
+
+Beyond its events, a screen's **controls** can name functions too — each
+registered with `@xeplr/actions` and an `event` saying what it is for:
+
+| event | named in | runs on | is given | returns |
+|---|---|---|---|---|
+| `listRows` | a list's `rowsFrom` | `GET /factory/rows/:screen` | `ctx.query` (`{ q, filter }` — what was typed, and the chip: always one of the list's own, the first when none or an unknown one is asked), `ctx.node`, `ctx.user`, `ctx.tenant`, `ctx.db(table)`, `ctx.knex` | rows, or `{ rows, counts: { chipKey: n } }` |
+| `rowDetails` | a list column's `details` | `GET /factory/rows/:screen/details` | `ctx.id` (the row), `ctx.column`, and the same | `[{ text, sub?, at?, open? }]` (at most 50) |
+| `button` | a button's `action` | `POST /factory/buttons/:screen/:button` | `input`: the button's `params` from the screen, and `note` when it asks for one — checked against the function's `inputSchema`; `system`: `{ record, id, user, tenant, knex, db, screen, screenKey, button, reject }` | `{ message? }` — shown to the person |
+
+- **The function and its parameters come from the published screen, never the request.** A press names a button by id and carries the record's id and the note; anything else in the body is ignored. A list request carries the search and the chip.
+- **The record decides.** A button acts on one record of the screen's table (`source`), read here — this company, active rows; another company's id is 404. Its `when` / `disabledWhen` are checked again on that row, so a hidden or greyed-out button pressed by hand is refused (409, "does not apply to this record now").
+- **Runs through `runAction`**, so `inputSchema` checks the parameters exactly as a job or a workflow step's are (`options` = values allowed). `reject(message, { field })` refuses with a 422 like a form rule.
+- **Publishing checks them.** A screen whose controls name a function nobody registered, one registered for another event, or a button whose parameters its function does not take (one it does not take, a required one missing, a value outside `options`, a note it has no input for) is refused, saying which (`body.missingFunctions`, each with `at`: `nodes[2].props.buttons[1].action`).
+- `GET /factory/functions` lists each function's `inputSchema` (names, types, `required`, `options`, descriptions — never code), so the designer offers a button's parameters.
+
 ### From 1.x
 
 1.x attached **hook files** per screen (`init({ hooks })`, `registerHooks`, `save.before` / `get.after` / `override`). 2.0 removes them, and passing them **stops startup** with a message saying so — a rule that silently stopped running would be worse. Move each hook into a registered function and name it in the screen's events: `save.before` → `beforeSave`, `save.after` → `afterSave`, `get.before` → `beforeLoad`, `delete.before` → `beforeDelete`, `error` → `onError`. `get.after` and `override` have no event: shape a record with the table's model (`FactoryModel`) instead.
@@ -249,7 +268,10 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `POST /factory/screens/:key/publish` | draft → next version, table created / changed to match; `{ confirmDrop }` to allow dropping columns, `{ confirmConvert }` to allow converting them |
 | `POST /factory/entities` | a new form `{ key, label? }` — the key (`farming_department`) names the screens and the table and is fixed once published; the label is what people see: its list and edit screens as drafts, with a starter Name field. Refused (409) if the screens or the table already exist |
 | `DELETE /factory/screens/:key` | remove a form. The design always goes; its table is dropped only when it is **empty** and no other screen reads it, otherwise it is kept and the answer says how many rows kept it. Refused while another form's dropdown points at the table, or while another form shows it inside itself (a subform), naming that form. Group `factory:design` (migration 0004) |
-| `GET /factory/functions` | the app's registered functions a screen's events (and a flow's `decide`) can pick: `[{ name, event, description }]`, never code. Group `factory:design` (migration 0005) |
+| `GET /factory/functions` | the app's registered functions a screen's events, its controls (`listRows`, `rowDetails`, `button`) and a flow's `decide` can pick: `[{ name, event, description, inputSchema }]`, never code. Group `factory:design` (migration 0005) |
+| `GET /factory/rows/:key` | a list's rows worked out by its `rowsFrom` function: `[{ rows, counts, q, filter }]`. `?node=` (the list, when the screen has more than one), `&q=` (at most 200 characters), `&filter=` (a chip key). `List factory rows`, `factory:view` (migration 0006) |
+| `GET /factory/rows/:key/details` | one cell's hover box: `?node=&column=<field>&id=<row id>` → the column's `details` function's entries. Same catalog row |
+| `POST /factory/buttons/:key/:button` | press a button on one record: `{ id, note? }` (a note is text, at most 1000 characters) → `[{ button, message, output }]`. 404 for a button the published screen does not have or a record this company does not have; 409 when the button does not apply to the record now. `Press factory button`, `factory:write` (migration 0006) |
 | `GET /factory/tables` | tables a dropdown can point at: **masters first**, by the name people know them as ("Departments"), then every other table a published screen reads |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |
 | `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields). `?belongsTo=departmentId&belongsToId=<id>` returns only the rows whose column equals that id — a sub-table on a form. No id means **no rows**, never every row |
