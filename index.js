@@ -17,6 +17,7 @@ var { getConnection, getMtConfig, runWithMt } = require('@xeplr/db');
 var createFactoryRouter = require('./lib/router');
 var { createScreensStore } = require('./lib/screens');
 var { createRecordsStore } = require('./lib/records');
+var { createFunctionsStore } = require('./lib/functions');
 var { createFilesStore } = require('./lib/files');
 var { refuseHookFiles } = require('./lib/hooks');
 var { createEntitiesStore } = require('./lib/entities');
@@ -55,7 +56,8 @@ async function init(config) {
   var records = createRecordsStore(_knex, screens, models);
   var entities = createEntitiesStore(_knex, screens, records);
   var files = createFilesStore(records, { filesDir: config.filesDir });
-  _stores = { screens: screens, records: records, entities: entities, models: models, files: files };
+  var functions = createFunctionsStore(_knex, screens, models);
+  _stores = { screens: screens, records: records, entities: entities, models: models, files: files, functions: functions };
   return _stores;
 }
 
