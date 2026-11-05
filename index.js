@@ -56,7 +56,7 @@ async function init(config) {
   var records = createRecordsStore(_knex, screens, models);
   var entities = createEntitiesStore(_knex, screens, records);
   var files = createFilesStore(records, { filesDir: config.filesDir });
-  var functions = createFunctionsStore(_knex, screens, models);
+  var functions = createFunctionsStore(_knex, screens, models, files);
   _stores = { screens: screens, records: records, entities: entities, models: models, files: files, functions: functions };
   return _stores;
 }
