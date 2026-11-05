@@ -33,11 +33,13 @@ function registerAll() {
     name: 'orderList', event: 'listRows', description: 'Orders, most urgent first',
     execute: async function(ctx) {
       seen.push(['orderList', ctx.query.q, ctx.query.filter, ctx.user && ctx.user.id]);
+      if (ctx.query.kpi || ctx.query.from || ctx.query.to) seen.push(['dashboard', ctx.query.kpi, ctx.query.from, ctx.query.to]);
       var all = await ctx.db('orders').select('id', 'name', 'customStatus').orderBy('name');
       var shown = all.filter(function(o) { return !ctx.query.q || o.name.indexOf(ctx.query.q) !== -1; });
       var counts = { all: shown.length, packed: shown.filter(function(o) { return o.customStatus === 'packed'; }).length };
       var rows = ctx.query.filter === 'packed' ? shown.filter(function(o) { return o.customStatus === 'packed'; }) : shown;
-      return { rows: rows.map(function(o) { return { id: o.id, orderNumber: '#' + o.name, customStatus: o.customStatus }; }), counts: counts };
+      if (ctx.query.kpi === 'packed') rows = rows.filter(function(o) { return o.customStatus === 'packed'; });
+      return { rows: rows.map(function(o) { return { id: o.id, orderNumber: '#' + o.name, customStatus: o.customStatus }; }), counts: counts, kpis: { packed: counts.packed, total: counts.all } };
     }
   });
   actions.register({
@@ -46,9 +48,11 @@ function registerAll() {
   });
   actions.register({
     name: 'setOrderStatus', event: 'button', description: 'Sets the order status',
-    inputSchema: [{ name: 'status', type: 'string', required: true, options: STATUSES }, { name: 'note', type: 'string' }],
+    inputSchema: [{ name: 'status', type: 'string', required: true, options: STATUSES }, { name: 'note', type: 'string' },
+      { name: 'lengthIn', type: 'number' }, { name: 'weightKg', type: 'number' }],
     execute: async function(arg) {
       var s = arg.system;
+      if (arg.input.lengthIn !== undefined) seen.push(['size', arg.input.lengthIn, arg.input.weightKg, arg.input.status]);
       seen.push(['setOrderStatus', arg.input.status, arg.input.note || null, s.record.name, s.user.id]);
       if (arg.input.note === 'refuse') s.reject('Not today', { field: 'note' });
       await s.db('orders').where('id', s.id).update({ customStatus: arg.input.status });
@@ -192,7 +196,8 @@ test('functions named by controls', async function(t) {
   await t.test('GET /factory/functions says what a button\'s function takes', async function() {
     var res = await call('GET', '/factory/functions');
     var fn = res.body.dataArray.find(function(f) { return f.name === 'setOrderStatus'; });
-    assert.deepEqual(fn.inputSchema, [{ name: 'status', type: 'string', required: true, options: STATUSES }, { name: 'note', type: 'string', required: false }]);
+    assert.deepEqual(fn.inputSchema, [{ name: 'status', type: 'string', required: true, options: STATUSES }, { name: 'note', type: 'string', required: false },
+      { name: 'lengthIn', type: 'number', required: false }, { name: 'weightKg', type: 'number', required: false }]);
   });
 
   await t.test('POST /factory/buttons: the document\'s parameters, the person\'s note, the record and the caller', async function() {
@@ -250,6 +255,68 @@ test('functions named by controls', async function(t) {
     assert.equal(res.status, 400);
     res = await call('POST', '/factory/buttons/order_actions/packed', { id: ids.GA1, note: { $gt: '' } });
     assert.equal(res.status, 400);
+  });
+
+  await t.test('a dashboard: the KPI card and the range reach the function, and its counts come back', async function() {
+    var dash = withNode(model.createScreen({ id: 'orders_dash', name: 'Orders' }), 'list', {
+      rowsFrom: 'orderList', actions: [], kpis: [{ key: 'packed', label: 'Packed' }, { key: 'total', label: 'Total' }],
+      dateRange: { label: 'Placed', default: 'last30' }, columns: [{ field: 'orderNumber', label: 'Order' }]
+    });
+    var pub = await publish(dash.doc);
+    assert.equal(pub.status, 200, pub.body.message);
+    var res = await call('GET', '/factory/rows/orders_dash?kpi=packed&from=2026-10-07&to=2026-11-05');
+    assert.equal(res.status, 200, res.body.message);
+    var out = res.body.dataArray[0];
+    assert.deepEqual(seen.pop(), ['dashboard', 'packed', '2026-10-07', '2026-11-05']);
+    seen.pop();
+    var packedNow = (await knex('orders').where({ mtId1: 'c1', customStatus: 'packed' }).orderBy('name').select('name')).map(function(r) { return '#' + r.name; });
+    assert.deepEqual(out.kpis, { packed: packedNow.length, total: 2 });
+    assert.deepEqual(out.rows.map(function(r) { return r.orderNumber; }), packedNow);
+    assert.equal(out.kpi, 'packed');
+  });
+
+  await t.test('...a card the list does not have is none; a range that is not two days is refused', async function() {
+    var res = await call('GET', '/factory/rows/orders_dash?kpi=everything');
+    assert.equal(res.body.dataArray[0].kpi, '');
+    seen.pop();
+    for (var q of ['from=yesterday', 'from=2026-02-30', 'from=2026-11-05&to=2026-11-01']) {
+      res = await call('GET', '/factory/rows/orders_dash?' + q);
+      assert.equal(res.status, 400, q);
+    }
+    res = await call('GET', '/factory/rows/orders_board?from=2026-11-01');
+    assert.equal(res.status, 400, 'a list with no date range');
+    assert.match(res.body.message, /no date range/);
+  });
+
+  await t.test('a button that asks for values: checked as the dialog checks them, typed, and handed to the function', async function() {
+    var SIZE = [{ name: 'lengthIn', label: 'Length', type: 'number', unit: 'in', required: true, min: 0.1 },
+      { name: 'weightKg', label: 'Weight', type: 'number', unit: 'kg', required: true, min: 0.01 }];
+    var sized = Object.assign({}, PACKED, { id: 'packed-sized', ask: { fields: SIZE } });
+    var made = withNode(model.createScreen({ id: 'order_size', name: 'Order size', source: 'orders' }), 'buttons', { buttons: [sized] });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 200, res.body.message);
+    await knex('orders').where('id', ids.GA1).update({ customStatus: 'ordered' });
+
+    res = await call('POST', '/factory/buttons/order_size/packed-sized', { id: ids.GA1, values: { lengthIn: '', weightKg: 'heavy' } });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.message, 'Length is required; Weight must be a number');
+    assert.deepEqual(res.body.error.fields.map(function(f) { return f.field; }), ['lengthIn', 'weightKg']);
+    assert.equal((await knex('orders').where('id', ids.GA1).first()).customStatus, 'ordered', 'nothing ran');
+
+    res = await call('POST', '/factory/buttons/order_size/packed-sized', { id: ids.GA1, values: { lengthIn: '12.5', weightKg: '1.2', status: 'shipped' } });
+    assert.equal(res.status, 200, res.body.message);
+    seen.pop();
+    assert.deepEqual(seen.pop(), ['size', 12.5, 1.2, 'packed'], 'numbers, and the screen\'s status — not the one sent');
+    await knex('orders').where('id', ids.GA1).update({ customStatus: 'ordered' });
+  });
+
+  await t.test('...a field its function does not take is refused at publish', async function() {
+    var made = withNode(model.createScreen({ id: 'order_size2', name: 'Order size', source: 'orders' }), 'buttons', {
+      buttons: [Object.assign({}, PACKED, { id: 'p2', ask: { fields: [{ name: 'heightIn', label: 'Height', type: 'number' }] } })]
+    });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 422);
+    assert.match(res.body.message, /asks for "heightIn", but takes no "heightIn"/);
   });
 
   await t.test('...a function that stops being registered fails by name', async function() {
