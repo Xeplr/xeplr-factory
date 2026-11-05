@@ -125,7 +125,7 @@ A choice from a **fixed** list is checked against that list on the server too �
 
 ## Files
 
-A **file** field stores one thing in its column: the path the upload answered with. The bytes live in the folder of the tenant the request is for, under **`XEPLR_DATA_DIR`** (required — `@xeplr/actions`' `requiredEnv`; the app calls `registerApplication()`), in `screens/`, a folder per table:
+A **file** field stores one thing in its column: the path the upload answered with — or, with `multiple`, several paths in one `text` column, comma separated, read back as a list (its `maxFiles` is checked on save like any rule). The bytes live in the folder of the tenant the request is for, under **`XEPLR_DATA_DIR`** (required — `@xeplr/actions`' `requiredEnv`; the app calls `registerApplication()`), in `screens/`, a folder per table:
 
 ```
 <XEPLR_DATA_DIR>/<app>/<mtId1>/<mtId2>/screens/<table>/<id>__<name>     column: surveys/9f3c…__Field_notes.txt
@@ -138,6 +138,14 @@ The id in front keeps two people's `scan.pdf` apart; the name after `__` is what
 **The field's own rules decide, and the extension is the authority.** `POST /factory/files/:key/:field` looks the screen up, finds that `file` field, and checks the file against *its* `accept` (a list of extensions) and `maxSize` (megabytes) — 400 either way, with the field's label in the message. A browser's content type is the sender's word for it and is not consulted at all. Anything refused is deleted, not left in a corner of the disk.
 
 **Nothing is served from the disk.** There is no static directory: the only way back out is `GET /factory/files/<path>`, behind the same guard as reading a record. The path is resolved inside the **reader's own** `screens/` folder and anything that climbs out of it is refused (400); a path with nothing at it is 404. **Another company's path is 404 as well** — it is read in this company's folder, where it names nothing — so a path is not a permission just because someone has it.
+
+**A button's files** (its `ask.file`) are uploaded before the press to `POST /factory/buttons/:key/:button/files`, checked against `ask.file`'s `accept` and `maxSize` from the published screen, and kept in a folder of their own — the button's, and inside it the person's:
+
+```
+<XEPLR_DATA_DIR>/<app>/<mtId1>/<mtId2>/screens/<table>/_buttons/<button id>/<user id>/<id>__<name>
+```
+
+The press then names them (`files`). Only paths **this person stored for this button** are taken — another field's file, another button's, another person's, or one that climbs out is refused (400) before the function runs. `required`, `multiple` and `maxFiles` are checked again. The function gets the paths as `input.files` and `system.files` = `[{ path, name, size, fullPath }]` to read the bytes from.
 
 One limit worth knowing: within a company the route checks **access, not ownership** — a caller who may read that table's records may fetch any of its stored paths. And a file whose record is deleted, or whose value is replaced, stays on disk; tidying those up is the app's to schedule.
 
@@ -206,13 +214,13 @@ registered with `@xeplr/actions` and an `event` saying what it is for:
 |---|---|---|---|---|
 | `listRows` | a list's `rowsFrom` | `GET /factory/rows/:screen` | `ctx.query` (`{ q, filter }` — what was typed, and the chip: always one of the list's own, the first when none or an unknown one is asked), `ctx.node`, `ctx.user`, `ctx.tenant`, `ctx.db(table)`, `ctx.knex` | rows, or `{ rows, counts: { chipKey: n } }` |
 | `rowDetails` | a list column's `details` | `GET /factory/rows/:screen/details` | `ctx.id` (the row), `ctx.column`, and the same | `[{ text, sub?, at?, open? }]` (at most 50) |
-| `button` | a button's `action` | `POST /factory/buttons/:screen/:button` | `input`: the button's `params` from the screen, and `note` when it asks for one — checked against the function's `inputSchema`; `system`: `{ record, id, user, tenant, knex, db, screen, screenKey, button, reject }` | `{ message? }` — shown to the person |
+| `button` | a button's `action` | `POST /factory/buttons/:screen/:button` | `input`: the button's `params` from the screen, `note` when it asks for one, and `files` (stored paths) when its `ask.file` takes them — checked against the function's `inputSchema`; `system`: `{ record, id, user, tenant, knex, db, screen, screenKey, button, files, reject }` (`files`: `[{ path, name, size, fullPath }]`) | `{ message? }` — shown to the person |
 
-- **The function and its parameters come from the published screen, never the request.** A press names a button by id and carries the record's id and the note; anything else in the body is ignored. A list request carries the search and the chip.
+- **The function and its parameters come from the published screen, never the request.** A press names a button by id and carries the record's id, the note and the files it stored first; anything else in the body is ignored. A list request carries the search and the chip.
 - **The record decides.** A button acts on one record of the screen's table (`source`), read here — this company, active rows; another company's id is 404. Its `when` / `disabledWhen` are checked again on that row, so a hidden or greyed-out button pressed by hand is refused (409, "does not apply to this record now").
 - **Runs through `runAction`**, so `inputSchema` checks the parameters exactly as a job or a workflow step's are (`options` = values allowed). `reject(message, { field })` refuses with a 422 like a form rule.
 - **Publishing checks them.** A screen whose controls name a function nobody registered, one registered for another event, or a button whose parameters its function does not take (one it does not take, a required one missing, a value outside `options`, a note it has no input for) is refused, saying which (`body.missingFunctions`, each with `at`: `nodes[2].props.buttons[1].action`).
-- Needs `@xeplr/ui-factory` **1.8.4** or later — the model that knows buttons and function-fed lists.
+- Needs `@xeplr/ui-factory` **1.8.6** or later — the model that knows buttons, function-fed lists, a button's `ask.file` and fields holding several files.
 - `GET /factory/functions` lists each function's `inputSchema` (names, types, `required`, `options`, descriptions — never code), so the designer offers a button's parameters.
 
 ### From 1.x
@@ -272,7 +280,8 @@ All under `/factory`; responses are xeplr's `{ code, message, error, dataArray }
 | `GET /factory/functions` | the app's registered functions a screen's events, its controls (`listRows`, `rowDetails`, `button`) and a flow's `decide` can pick: `[{ name, event, description, inputSchema }]`, never code. Group `factory:design` (migration 0005) |
 | `GET /factory/rows/:key` | a list's rows worked out by its `rowsFrom` function: `[{ rows, counts, q, filter }]`. `?node=` (the list, when the screen has more than one), `&q=` (at most 200 characters), `&filter=` (a chip key). `List factory rows`, `factory:view` (migration 0006) |
 | `GET /factory/rows/:key/details` | one cell's hover box: `?node=&column=<field>&id=<row id>` → the column's `details` function's entries. Same catalog row |
-| `POST /factory/buttons/:key/:button` | press a button on one record: `{ id, note? }` (a note is text, at most 1000 characters) → `[{ button, message, output }]`. 404 for a button the published screen does not have or a record this company does not have; 409 when the button does not apply to the record now. `Press factory button`, `factory:write` (migration 0006) |
+| `POST /factory/buttons/:key/:button` | press a button on one record: `{ id, note?, files? }` (`files`: paths this person stored for this button) (a note is text, at most 1000 characters) → `[{ button, message, output }]`. 404 for a button the published screen does not have or a record this company does not have; 409 when the button does not apply to the record now. `Press factory button`, `factory:write` (migration 0006) |
+| `POST /factory/buttons/:key/:button/files` | a file the button's `ask.file` takes, stored before the press (multipart, field `file`) → `[{ path, name, size }]`. 400 when it is not a type or size `ask.file` takes, or the button takes no files. Part of pressing it: guarded by the same `Press factory button` row, no row of its own |
 | `GET /factory/tables` | tables a dropdown can point at: **masters first**, by the name people know them as ("Departments"), then every other table a published screen reads |
 | `GET /factory/options/:table` | `[{ id, name }]` for a dropdown |
 | `GET /factory/records/:key` | a screen's records (a list screen reads its edit screen's fields). `?belongsTo=departmentId&belongsToId=<id>` returns only the rows whose column equals that id — a sub-table on a form. No id means **no rows**, never every row |
