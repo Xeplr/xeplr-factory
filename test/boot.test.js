@@ -108,6 +108,21 @@ test('startup', async function(t) {
     assert.equal(noDesign.status, 403, 'publishing changes tables — its own permission');
   });
 
+  await t.test('access: one form\'s records, opened by its own row — every other form still refused', async function() {
+    var only = 'Save factory record: department_edit|List factory records: department_list';
+    var saved = await call('POST', '/factory/records/department_edit/save', { values: { name: 'Stores' } }, only);
+    assert.equal(saved.status, 200, saved.body.message);
+    assert.equal((await call('GET', '/factory/records/department_list', null, only)).status, 200);
+    var other = await call('POST', '/factory/records/employee_edit/save', { values: {} }, only);
+    assert.equal(other.status, 403, 'another form: refused');
+    assert.match(other.body.message, /Access denied: Save factory record/);
+    var del = await call('POST', '/factory/records/department_edit/delete', { id: saved.body.dataArray[0].id }, only);
+    assert.equal(del.status, 403, 'saving is not deleting');
+    var design = await call('POST', '/factory/screens/department_edit/publish', {}, 'Publish factory screen: department_edit');
+    assert.equal(design.status, 403, 'only record routes open per form');
+    assert.equal(factory.formApiName('Save factory record', 'x_edit'), 'Save factory record: x_edit');
+  });
+
   await t.test('access: no access information at all is refused, not waved through', async function() {
     var res = await call('GET', '/factory/screens', null, 'none');
     assert.equal(res.status, 403);

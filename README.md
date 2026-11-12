@@ -54,7 +54,13 @@ Every route is a row in the auth database's `apis` catalog — `factory:view` (s
 
 With `{ access: true }` each route answers only a caller whose `req.access.apis` (put on the request by the auth gate, from `/auth/api/me`) names it; anyone else gets 403 `Access denied: Publish factory screen`. A request with no `req.access` at all is refused too — the router is then mounted where no gate ran. The names are `factory.API_NAMES`.
 
-Access is per route, not yet per screen or table: whoever may save records may save them on any published screen.
+**One form's records.** `Save factory record` lets a role save records on *every* published screen. To let a role add one form's records and nobody else's, grant the same name **for that screen**: `Save factory record: movement_edit` (`factory.formApiName(name, screenKey)`). The record routes — list, get, save, delete and a file field's upload — each accept either their own name or their name for the screen in the URL. The app adds those rows to `apis` and grants them; nothing else opens per form (publishing, buttons and rows keep their one name).
+
+```sql
+INSERT INTO "apis" (id, name, "apiGroup", "isActive", "mtId1", "recordCreatedDate", "recordModifiedDate")
+SELECT encode(gen_random_bytes(12), 'hex'), 'Save factory record: movement_edit', 'factory:write', true, '*', now(), now()
+WHERE NOT EXISTS (SELECT 1 FROM "apis" a WHERE a.name = 'Save factory record: movement_edit');
+```
 
 The two file routes add no rows of their own: a file field's value is a record's value, so uploading one is `Save factory record` and reading it back is `Get factory record`. Nothing new to migrate.
 
