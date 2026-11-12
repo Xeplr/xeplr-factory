@@ -175,5 +175,7 @@ module.exports = {
   // database, and the access rows into the auth database (XEPLR_AUTH_MIGRATIONS).
   migrationsDir: path.join(__dirname, 'migrations'),
   authMigrationsDir: path.join(__dirname, 'migrations-auth'),
-  API_NAMES: createFactoryRouter.API_NAMES
+  API_NAMES: createFactoryRouter.API_NAMES,
+  // "Save factory record: movement_edit" — the access row opening one form's records.
+  formApiName: createFactoryRouter.formApiName
 };
