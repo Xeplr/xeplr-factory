@@ -60,6 +60,19 @@ function registerAll() {
     }
   });
   actions.register({ name: 'tellHR', event: 'afterSave', execute: function() {} });
+  // An autocomplete's suggestions: what was typed reaches it; it answers a
+  // few good ones and some it should not (cleaned before they leave).
+  actions.register({
+    name: 'productSuggestions', event: 'suggest', description: 'Products from the shop',
+    execute: function(ctx) {
+      seen.push(['productSuggestions', ctx.query.q, ctx.node.id, ctx.user && ctx.user.id]);
+      return [
+        { value: 'Silver Gallop Horse', sub: 'GA-HR-01', image: 'https://cdn.test/horse.jpg', fill: { sku: 'GA-HR-01', nested: { no: 1 } } },
+        { value: '' },
+        { value: 'Brass Vase ' + ctx.query.q }
+      ];
+    }
+  });
 }
 
 before(async function() {
@@ -178,6 +191,33 @@ test('functions named by controls', async function(t) {
     assert.deepEqual(res.body.dataArray, [{ text: 'Status set for ' + ids.GA1, sub: 'Activity' }]);
     var none = await call('GET', '/factory/rows/orders_board/details?column=orderNumber&id=' + ids.GA1);
     assert.equal(none.status, 404, 'a column with no hover box');
+  });
+
+  await t.test('an autocomplete: refused at publish without a registered "suggest" function; then GET /factory/suggest answers', async function() {
+    var made = withNode(model.createScreen({ id: 'item_edit', name: 'Item', source: 'items' }), 'autocomplete', { name: 'name', label: 'Product', suggestFrom: 'orderList' });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 422);
+    assert.match(res.body.message, /props\.suggestFrom: "orderList" is written for "listRows", not "suggest"/);
+    var good = Object.assign({}, made.doc, { nodes: [Object.assign({}, made.doc.nodes[0], { props: Object.assign({}, made.doc.nodes[0].props, { suggestFrom: 'productSuggestions' }) })] });
+    res = await publish(good);
+    assert.equal(res.status, 200, res.body.message);
+
+    res = await call('GET', '/factory/suggest/item_edit?node=' + made.id + '&q=' + encodeURIComponent('  hor '));
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray, [
+      { value: 'Silver Gallop Horse', label: 'Silver Gallop Horse', sub: 'GA-HR-01', image: 'https://cdn.test/horse.jpg', fill: { sku: 'GA-HR-01' } },
+      { value: 'Brass Vase hor', label: 'Brass Vase hor' }
+    ], 'cleaned: no value dropped, fill kept to plain values');
+    assert.deepEqual(seen.pop(), ['productSuggestions', 'hor', made.id, 'u1'], 'the text trimmed, the field, who asked');
+
+    res = await call('GET', '/factory/suggest/item_edit?node=' + made.id + '&q=h');
+    assert.deepEqual(res.body.dataArray, [], 'fewer letters than it asks after: not asked');
+    assert.notEqual((seen[seen.length - 1] || [])[1], 'h');
+    res = await call('GET', '/factory/suggest/item_edit?node=nope&q=hor');
+    assert.equal(res.status, 404);
+    assert.match(res.body.message, /no autocomplete field "nope"/);
+    res = await call('GET', '/factory/suggest/no_such_screen?node=' + made.id + '&q=hor');
+    assert.equal(res.status, 404);
   });
 
   var actionsDoc;
