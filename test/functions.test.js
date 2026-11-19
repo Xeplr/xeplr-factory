@@ -60,6 +60,17 @@ function registerAll() {
     }
   });
   actions.register({ name: 'tellHR', event: 'afterSave', execute: function() {} });
+  // A button that asks for rows — the packets an order went out in — and the
+  // rows it starts from (what was given last time).
+  actions.register({
+    name: 'setPackets', event: 'button', description: 'The packets an order went out in',
+    inputSchema: [{ name: 'parcels', type: 'array', required: true }],
+    execute: function(arg) { seen.push(['setPackets', arg.input.parcels, arg.system.record.name]); return { message: arg.input.parcels.length + ' packets' }; }
+  });
+  actions.register({
+    name: 'orderPackets', event: 'buttonOptions', description: 'The packets given last time',
+    execute: function(ctx) { return [{ lengthCm: 30, weightKg: 1.2 }, { lengthCm: 20, weightKg: 0.6, junk: 'x' }]; }
+  });
   // A list on a screen about one record: that record's rows.
   actions.register({
     name: 'orderTasks', event: 'listRows', description: 'An order\'s tasks',
@@ -447,6 +458,25 @@ test('functions named by controls', async function(t) {
     assert.equal(res.status, 400, 'a board is about no record');
   });
 
+  await t.test('a button that asks for rows: started from its function, checked row by row, handed over as a list', async function() {
+    var rows = { name: 'parcels', label: 'Packets', type: 'rows', rowLabel: 'Packet', required: true, min: 1, max: 3, startFrom: 'orderPackets',
+      fields: [{ name: 'lengthCm', label: 'Length', type: 'number', unit: 'cm', required: true }, { name: 'weightKg', label: 'Weight', type: 'number', unit: 'kg', required: true }] };
+    var made = withNode(model.createScreen({ id: 'order_packets', name: 'Packets', source: 'orders' }), 'buttons', {
+      buttons: [{ id: 'packets', label: 'Packets', action: 'setPackets', params: {}, ask: { title: 'Packets', fields: [rows] } }]
+    });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 200, res.body.message);
+    res = await call('GET', '/factory/buttons/order_packets/packets/options?field=parcels&id=' + ids.GA1);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray, [{ lengthCm: '30', weightKg: '1.2' }, { lengthCm: '20', weightKg: '0.6' }]);
+    res = await call('POST', '/factory/buttons/order_packets/packets', { id: ids.GA1, values: { parcels: [{ lengthCm: '30', weightKg: '' }] } });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.message, 'Packet 1: Weight is required');
+    res = await call('POST', '/factory/buttons/order_packets/packets', { id: ids.GA1, values: { parcels: [{ lengthCm: '30', weightKg: '1.2' }, { lengthCm: '', weightKg: '' }, { lengthCm: '20', weightKg: '0.6' }] } });
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(seen.pop(), ['setPackets', [{ lengthCm: 30, weightKg: 1.2 }, { lengthCm: 20, weightKg: 0.6 }], 'GA1']);
+  });
+
   await t.test('a details panel: GET /factory/details answers for one record, More asks again, links are cleaned', async function() {
     var made = withNode(model.createScreen({ id: 'order_facts', name: 'Order facts', source: 'orders' }), 'details', { title: 'Order', detailsFrom: 'orderFeed' });
     var res = await publish(made.doc);
@@ -460,13 +490,13 @@ test('functions named by controls', async function(t) {
     res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2);
     assert.equal(res.status, 200, res.body.message);
     assert.deepEqual(res.body.dataArray[0], { sections: [
-      { title: 'Order', rows: [{ label: 'Name', text: 'GA2', href: null, tone: null }, { label: 'Status', text: status, href: null, tone: 'success' }], items: [] },
-      { title: 'Contact', rows: [{ label: 'Phone', text: '+91 98', href: 'tel:+9198', tone: null }, { label: 'Site', text: 'evil', href: null, tone: null }], items: [] }
+      { kind: 'facts', title: 'Order', rows: [{ label: 'Name', text: 'GA2', href: null, tone: null }, { label: 'Status', text: status, href: null, tone: 'success' }], items: [] },
+      { kind: 'facts', title: 'Contact', rows: [{ label: 'Phone', text: '+91 98', href: 'tel:+9198', tone: null }, { label: 'Site', text: 'evil', href: null, tone: null }], items: [] }
     ], more: true }, 'the empty row, the empty section and the script link are gone');
     assert.deepEqual(seen.pop(), ['orderDetails', 'GA2', false]);
 
     res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2 + '&more=1');
-    assert.deepEqual(res.body.dataArray[0], { sections: [{ title: 'More', rows: [{ label: 'Age', text: '3 days', href: null, tone: null }], items: [] }], more: false });
+    assert.deepEqual(res.body.dataArray[0], { sections: [{ kind: 'facts', title: 'More', rows: [{ label: 'Age', text: '3 days', href: null, tone: null }], items: [] }], more: false });
     assert.deepEqual(seen.pop(), ['orderDetails', 'GA2', true]);
 
     res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2, null, 'c2');
