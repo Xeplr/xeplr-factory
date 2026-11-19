@@ -60,6 +60,47 @@ function registerAll() {
     }
   });
   actions.register({ name: 'tellHR', event: 'afterSave', execute: function() {} });
+  // A button that asks for rows — the packets an order went out in — and the
+  // rows it starts from (what was given last time).
+  actions.register({
+    name: 'setPackets', event: 'button', description: 'The packets an order went out in',
+    inputSchema: [{ name: 'parcels', type: 'array', required: true }],
+    execute: function(arg) { seen.push(['setPackets', arg.input.parcels, arg.system.record.name]); return { message: arg.input.parcels.length + ' packets' }; }
+  });
+  actions.register({
+    name: 'orderPackets', event: 'buttonOptions', description: 'The packets given last time',
+    execute: function(ctx) { return [{ lengthCm: 30, weightKg: 1.2 }, { lengthCm: 20, weightKg: 0.6, junk: 'x' }]; }
+  });
+  // A list on a screen about one record: that record's rows.
+  actions.register({
+    name: 'orderTasks', event: 'listRows', description: 'An order\'s tasks',
+    execute: function(ctx) { return ctx.record ? [{ id: 't1', title: 'Pack ' + ctx.record.name }] : []; }
+  });
+  // A record's details: two sections, one with a row that says nothing and a
+  // link that is a script (both dropped), one empty section; "More" the rest.
+  actions.register({
+    name: 'orderDetails', event: 'recordDetails', description: 'What is known about an order',
+    execute: function(ctx) {
+      seen.push(['orderDetails', ctx.record.name, ctx.query.more]);
+      if (ctx.query.more) return { sections: [{ title: 'More', rows: [{ label: 'Age', text: '3 days' }] }] };
+      return { more: true, sections: [
+        { title: 'Order', rows: [{ label: 'Name', text: ctx.record.name }, { label: 'Status', text: ctx.record.customStatus, tone: 'success' }, { label: 'Note', text: '' }] },
+        { title: 'Contact', rows: [{ label: 'Phone', text: '+91 98', href: 'tel:+9198' }, { label: 'Site', text: 'evil', href: 'javascript:alert(1)' }] },
+        { title: 'Nothing', rows: [] }
+      ] };
+    }
+  });
+  // A record's feed: its comments, then its status as an event — and two
+  // entries a renderer cannot use (no id; nothing to show), dropped.
+  actions.register({
+    name: 'orderFeed', event: 'feedEntries', description: 'An order\'s comments and history',
+    execute: async function(ctx) {
+      seen.push(['orderFeed', ctx.id, ctx.record.name, ctx.node.id, ctx.user && ctx.user.id]);
+      var comments = await ctx.db('order_comments').where('orderId', ctx.id).select('id', 'body');
+      return comments.map(function(c) { return { id: 'c' + c.id, kind: 'comment', text: c.body, author: { name: 'Riya', badge: 'Packing' }, at: 'Today' }; })
+        .concat([{ id: 'status', kind: 'event', text: 'Status: ' + ctx.record.customStatus }, { text: 'no id' }, { id: 'empty', text: '' }]);
+    }
+  });
   // An autocomplete's suggestions: what was typed reaches it; it answers a
   // few good ones and some it should not (cleaned before they leave).
   actions.register({
@@ -357,6 +398,112 @@ test('functions named by controls', async function(t) {
     var res = await publish(made.doc);
     assert.equal(res.status, 422);
     assert.match(res.body.message, /asks for "heightIn", but takes no "heightIn"/);
+  });
+
+  await t.test('a feed: refused at publish without a registered "feedEntries" function; then GET /factory/feed answers for one record', async function() {
+    var comment = model.screensFromSpec({ entity: 'order comment', fields: [{ label: 'Order', name: 'orderId', type: 'dropdown', table: 'orders' }, { label: 'Body', type: 'textarea' }] });
+    var res = await publish(comment.edit);
+    assert.equal(res.status, 200, res.body.message);
+    var feedProps = { title: 'Comments', entriesFrom: 'orderList', eventsSwitch: true,
+      compose: { screen: 'order_comment_edit', linkField: 'orderId', textField: 'body' } };
+    var made = withNode(model.createScreen({ id: 'order_view', name: 'Order', source: 'orders' }), 'feed', feedProps);
+    res = await publish(made.doc);
+    assert.equal(res.status, 422);
+    assert.match(res.body.message, /props\.entriesFrom: "orderList" is written for "listRows", not "feedEntries"/);
+    var fixed = Object.assign({}, made.doc, { nodes: made.doc.nodes.map(function(n) { return Object.assign({}, n, { props: Object.assign({}, n.props, { entriesFrom: 'orderFeed' }) }); }) });
+    res = await publish(fixed);
+    assert.equal(res.status, 200, res.body.message);
+
+    // A comment saved through the compose form is what the function reads back.
+    var saved = await call('POST', '/factory/records/order_comment_edit/save', { values: { orderId: ids.GA1, body: 'Customer asked for gift wrap' } });
+    assert.equal(saved.status, 200, saved.body.message);
+
+    res = await call('GET', '/factory/feed/order_view?id=' + ids.GA1);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray[0].entries, [
+      { id: 'c' + saved.body.dataArray[0].id, kind: 'comment', text: 'Customer asked for gift wrap', author: { name: 'Riya', badge: 'Packing' }, at: 'Today', files: [], sub: null, convert: null, converted: null },
+      { id: 'status', kind: 'event', text: 'Status: ordered', author: null, at: null, files: [], sub: null, convert: null, converted: null }
+    ], 'cleaned: the entry with no id and the empty one dropped');
+    assert.deepEqual(seen.pop(), ['orderFeed', ids.GA1, 'GA1', made.id, 'u1']);
+  });
+
+  await t.test('...another company\'s record is not found, and the record must be named', async function() {
+    var res = await call('GET', '/factory/feed/order_view?id=' + ids.GA1, null, 'c2');
+    assert.equal(res.status, 404);
+    assert.equal(seen.length && seen[seen.length - 1][0] === 'orderFeed' ? 'ran' : 'not run', 'not run');
+    res = await call('GET', '/factory/feed/order_view');
+    assert.equal(res.status, 400);
+    res = await call('GET', '/factory/feed/order_view?node=nope&id=' + ids.GA1);
+    assert.equal(res.status, 404);
+    assert.match(res.body.message, /has no feed "nope"/);
+    res = await call('GET', '/factory/feed/orders_board?id=' + ids.GA1);
+    assert.equal(res.status, 404);
+    assert.match(res.body.message, /no feed/);
+  });
+
+  await t.test('a list on a screen about one record: the function is told which; another company\'s is a 404', async function() {
+    var made = withNode(model.createScreen({ id: 'order_tasks', name: 'Order', source: 'orders' }), 'list', {
+      rowsFrom: 'orderTasks', actions: [], layout: 'cards', columns: [{ field: 'title', label: 'Task' }]
+    });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 200, res.body.message);
+    res = await call('GET', '/factory/rows/order_tasks?id=' + ids.GA1);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray[0].rows, [{ id: 't1', title: 'Pack GA1' }]);
+    res = await call('GET', '/factory/rows/order_tasks');
+    assert.deepEqual(res.body.dataArray[0].rows, [], 'no record named: none');
+    res = await call('GET', '/factory/rows/order_tasks?id=' + ids.GA1, null, 'c2');
+    assert.equal(res.status, 404);
+    res = await call('GET', '/factory/rows/orders_board?id=' + ids.GA1);
+    assert.equal(res.status, 400, 'a board is about no record');
+  });
+
+  await t.test('a button that asks for rows: started from its function, checked row by row, handed over as a list', async function() {
+    var rows = { name: 'parcels', label: 'Packets', type: 'rows', rowLabel: 'Packet', required: true, min: 1, max: 3, startFrom: 'orderPackets',
+      fields: [{ name: 'lengthCm', label: 'Length', type: 'number', unit: 'cm', required: true }, { name: 'weightKg', label: 'Weight', type: 'number', unit: 'kg', required: true }] };
+    var made = withNode(model.createScreen({ id: 'order_packets', name: 'Packets', source: 'orders' }), 'buttons', {
+      buttons: [{ id: 'packets', label: 'Packets', action: 'setPackets', params: {}, ask: { title: 'Packets', fields: [rows] } }]
+    });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 200, res.body.message);
+    res = await call('GET', '/factory/buttons/order_packets/packets/options?field=parcels&id=' + ids.GA1);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray, [{ lengthCm: '30', weightKg: '1.2' }, { lengthCm: '20', weightKg: '0.6' }]);
+    res = await call('POST', '/factory/buttons/order_packets/packets', { id: ids.GA1, values: { parcels: [{ lengthCm: '30', weightKg: '' }] } });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.message, 'Packet 1: Weight is required');
+    res = await call('POST', '/factory/buttons/order_packets/packets', { id: ids.GA1, values: { parcels: [{ lengthCm: '30', weightKg: '1.2' }, { lengthCm: '', weightKg: '' }, { lengthCm: '20', weightKg: '0.6' }] } });
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(seen.pop(), ['setPackets', [{ lengthCm: 30, weightKg: 1.2 }, { lengthCm: 20, weightKg: 0.6 }], 'GA1']);
+  });
+
+  await t.test('a details panel: GET /factory/details answers for one record, More asks again, links are cleaned', async function() {
+    var made = withNode(model.createScreen({ id: 'order_facts', name: 'Order facts', source: 'orders' }), 'details', { title: 'Order', detailsFrom: 'orderFeed' });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 422);
+    assert.match(res.body.message, /props\.detailsFrom: "orderFeed" is written for "feedEntries", not "recordDetails"/);
+    var fixed = Object.assign({}, made.doc, { nodes: made.doc.nodes.map(function(n) { return Object.assign({}, n, { props: Object.assign({}, n.props, { detailsFrom: 'orderDetails' }) }); }) });
+    res = await publish(fixed);
+    assert.equal(res.status, 200, res.body.message);
+
+    var status = (await knex('orders').where('id', ids.GA2).first()).customStatus;
+    res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray[0], { sections: [
+      { kind: 'facts', title: 'Order', rows: [{ label: 'Name', text: 'GA2', href: null, tone: null }, { label: 'Status', text: status, href: null, tone: 'success' }], items: [] },
+      { kind: 'facts', title: 'Contact', rows: [{ label: 'Phone', text: '+91 98', href: 'tel:+9198', tone: null }, { label: 'Site', text: 'evil', href: null, tone: null }], items: [] }
+    ], more: true }, 'the empty row, the empty section and the script link are gone');
+    assert.deepEqual(seen.pop(), ['orderDetails', 'GA2', false]);
+
+    res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2 + '&more=1');
+    assert.deepEqual(res.body.dataArray[0], { sections: [{ kind: 'facts', title: 'More', rows: [{ label: 'Age', text: '3 days', href: null, tone: null }], items: [] }], more: false });
+    assert.deepEqual(seen.pop(), ['orderDetails', 'GA2', true]);
+
+    res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2, null, 'c2');
+    assert.equal(res.status, 404, 'another company\'s order');
+    res = await call('GET', '/factory/details/order_view?id=' + ids.GA2);
+    assert.equal(res.status, 404);
+    assert.match(res.body.message, /no details/);
   });
 
   await t.test('...a function that stops being registered fails by name', async function() {
