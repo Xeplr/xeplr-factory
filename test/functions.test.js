@@ -60,6 +60,17 @@ function registerAll() {
     }
   });
   actions.register({ name: 'tellHR', event: 'afterSave', execute: function() {} });
+  // A record's feed: its comments, then its status as an event — and two
+  // entries a renderer cannot use (no id; nothing to show), dropped.
+  actions.register({
+    name: 'orderFeed', event: 'feedEntries', description: 'An order\'s comments and history',
+    execute: async function(ctx) {
+      seen.push(['orderFeed', ctx.id, ctx.record.name, ctx.node.id, ctx.user && ctx.user.id]);
+      var comments = await ctx.db('order_comments').where('orderId', ctx.id).select('id', 'body');
+      return comments.map(function(c) { return { id: 'c' + c.id, kind: 'comment', text: c.body, author: { name: 'Riya', badge: 'Packing' }, at: 'Today' }; })
+        .concat([{ id: 'status', kind: 'event', text: 'Status: ' + ctx.record.customStatus }, { text: 'no id' }, { id: 'empty', text: '' }]);
+    }
+  });
   // An autocomplete's suggestions: what was typed reaches it; it answers a
   // few good ones and some it should not (cleaned before they leave).
   actions.register({
@@ -357,6 +368,47 @@ test('functions named by controls', async function(t) {
     var res = await publish(made.doc);
     assert.equal(res.status, 422);
     assert.match(res.body.message, /asks for "heightIn", but takes no "heightIn"/);
+  });
+
+  await t.test('a feed: refused at publish without a registered "feedEntries" function; then GET /factory/feed answers for one record', async function() {
+    var comment = model.screensFromSpec({ entity: 'order comment', fields: [{ label: 'Order', name: 'orderId', type: 'dropdown', table: 'orders' }, { label: 'Body', type: 'textarea' }] });
+    var res = await publish(comment.edit);
+    assert.equal(res.status, 200, res.body.message);
+    var feedProps = { title: 'Comments', entriesFrom: 'orderList', eventsSwitch: true,
+      compose: { screen: 'order_comment_edit', linkField: 'orderId', textField: 'body' } };
+    var made = withNode(model.createScreen({ id: 'order_view', name: 'Order', source: 'orders' }), 'feed', feedProps);
+    res = await publish(made.doc);
+    assert.equal(res.status, 422);
+    assert.match(res.body.message, /props\.entriesFrom: "orderList" is written for "listRows", not "feedEntries"/);
+    var fixed = Object.assign({}, made.doc, { nodes: made.doc.nodes.map(function(n) { return Object.assign({}, n, { props: Object.assign({}, n.props, { entriesFrom: 'orderFeed' }) }); }) });
+    res = await publish(fixed);
+    assert.equal(res.status, 200, res.body.message);
+
+    // A comment saved through the compose form is what the function reads back.
+    var saved = await call('POST', '/factory/records/order_comment_edit/save', { values: { orderId: ids.GA1, body: 'Customer asked for gift wrap' } });
+    assert.equal(saved.status, 200, saved.body.message);
+
+    res = await call('GET', '/factory/feed/order_view?id=' + ids.GA1);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray[0].entries, [
+      { id: 'c' + saved.body.dataArray[0].id, kind: 'comment', text: 'Customer asked for gift wrap', author: { name: 'Riya', badge: 'Packing' }, at: 'Today', files: [], sub: null },
+      { id: 'status', kind: 'event', text: 'Status: ordered', author: null, at: null, files: [], sub: null }
+    ], 'cleaned: the entry with no id and the empty one dropped');
+    assert.deepEqual(seen.pop(), ['orderFeed', ids.GA1, 'GA1', made.id, 'u1']);
+  });
+
+  await t.test('...another company\'s record is not found, and the record must be named', async function() {
+    var res = await call('GET', '/factory/feed/order_view?id=' + ids.GA1, null, 'c2');
+    assert.equal(res.status, 404);
+    assert.equal(seen.length && seen[seen.length - 1][0] === 'orderFeed' ? 'ran' : 'not run', 'not run');
+    res = await call('GET', '/factory/feed/order_view');
+    assert.equal(res.status, 400);
+    res = await call('GET', '/factory/feed/order_view?node=nope&id=' + ids.GA1);
+    assert.equal(res.status, 404);
+    assert.match(res.body.message, /has no feed "nope"/);
+    res = await call('GET', '/factory/feed/orders_board?id=' + ids.GA1);
+    assert.equal(res.status, 404);
+    assert.match(res.body.message, /no feed/);
   });
 
   await t.test('...a function that stops being registered fails by name', async function() {
