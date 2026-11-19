@@ -421,8 +421,8 @@ test('functions named by controls', async function(t) {
     res = await call('GET', '/factory/feed/order_view?id=' + ids.GA1);
     assert.equal(res.status, 200, res.body.message);
     assert.deepEqual(res.body.dataArray[0].entries, [
-      { id: 'c' + saved.body.dataArray[0].id, kind: 'comment', text: 'Customer asked for gift wrap', author: { name: 'Riya', badge: 'Packing' }, at: 'Today', files: [], sub: null },
-      { id: 'status', kind: 'event', text: 'Status: ordered', author: null, at: null, files: [], sub: null }
+      { id: 'c' + saved.body.dataArray[0].id, kind: 'comment', text: 'Customer asked for gift wrap', author: { name: 'Riya', badge: 'Packing' }, at: 'Today', files: [], sub: null, convert: null, converted: null },
+      { id: 'status', kind: 'event', text: 'Status: ordered', author: null, at: null, files: [], sub: null, convert: null, converted: null }
     ], 'cleaned: the entry with no id and the empty one dropped');
     assert.deepEqual(seen.pop(), ['orderFeed', ids.GA1, 'GA1', made.id, 'u1']);
   });
