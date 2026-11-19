@@ -60,6 +60,11 @@ function registerAll() {
     }
   });
   actions.register({ name: 'tellHR', event: 'afterSave', execute: function() {} });
+  // A list on a screen about one record: that record's rows.
+  actions.register({
+    name: 'orderTasks', event: 'listRows', description: 'An order\'s tasks',
+    execute: function(ctx) { return ctx.record ? [{ id: 't1', title: 'Pack ' + ctx.record.name }] : []; }
+  });
   // A record's details: two sections, one with a row that says nothing and a
   // link that is a script (both dropped), one empty section; "More" the rest.
   actions.register({
@@ -423,6 +428,23 @@ test('functions named by controls', async function(t) {
     res = await call('GET', '/factory/feed/orders_board?id=' + ids.GA1);
     assert.equal(res.status, 404);
     assert.match(res.body.message, /no feed/);
+  });
+
+  await t.test('a list on a screen about one record: the function is told which; another company\'s is a 404', async function() {
+    var made = withNode(model.createScreen({ id: 'order_tasks', name: 'Order', source: 'orders' }), 'list', {
+      rowsFrom: 'orderTasks', actions: [], layout: 'cards', columns: [{ field: 'title', label: 'Task' }]
+    });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 200, res.body.message);
+    res = await call('GET', '/factory/rows/order_tasks?id=' + ids.GA1);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray[0].rows, [{ id: 't1', title: 'Pack GA1' }]);
+    res = await call('GET', '/factory/rows/order_tasks');
+    assert.deepEqual(res.body.dataArray[0].rows, [], 'no record named: none');
+    res = await call('GET', '/factory/rows/order_tasks?id=' + ids.GA1, null, 'c2');
+    assert.equal(res.status, 404);
+    res = await call('GET', '/factory/rows/orders_board?id=' + ids.GA1);
+    assert.equal(res.status, 400, 'a board is about no record');
   });
 
   await t.test('a details panel: GET /factory/details answers for one record, More asks again, links are cleaned', async function() {
