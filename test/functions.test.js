@@ -60,6 +60,20 @@ function registerAll() {
     }
   });
   actions.register({ name: 'tellHR', event: 'afterSave', execute: function() {} });
+  // A record's details: two sections, one with a row that says nothing and a
+  // link that is a script (both dropped), one empty section; "More" the rest.
+  actions.register({
+    name: 'orderDetails', event: 'recordDetails', description: 'What is known about an order',
+    execute: function(ctx) {
+      seen.push(['orderDetails', ctx.record.name, ctx.query.more]);
+      if (ctx.query.more) return { sections: [{ title: 'More', rows: [{ label: 'Age', text: '3 days' }] }] };
+      return { more: true, sections: [
+        { title: 'Order', rows: [{ label: 'Name', text: ctx.record.name }, { label: 'Status', text: ctx.record.customStatus, tone: 'success' }, { label: 'Note', text: '' }] },
+        { title: 'Contact', rows: [{ label: 'Phone', text: '+91 98', href: 'tel:+9198' }, { label: 'Site', text: 'evil', href: 'javascript:alert(1)' }] },
+        { title: 'Nothing', rows: [] }
+      ] };
+    }
+  });
   // A record's feed: its comments, then its status as an event — and two
   // entries a renderer cannot use (no id; nothing to show), dropped.
   actions.register({
@@ -409,6 +423,35 @@ test('functions named by controls', async function(t) {
     res = await call('GET', '/factory/feed/orders_board?id=' + ids.GA1);
     assert.equal(res.status, 404);
     assert.match(res.body.message, /no feed/);
+  });
+
+  await t.test('a details panel: GET /factory/details answers for one record, More asks again, links are cleaned', async function() {
+    var made = withNode(model.createScreen({ id: 'order_facts', name: 'Order facts', source: 'orders' }), 'details', { title: 'Order', detailsFrom: 'orderFeed' });
+    var res = await publish(made.doc);
+    assert.equal(res.status, 422);
+    assert.match(res.body.message, /props\.detailsFrom: "orderFeed" is written for "feedEntries", not "recordDetails"/);
+    var fixed = Object.assign({}, made.doc, { nodes: made.doc.nodes.map(function(n) { return Object.assign({}, n, { props: Object.assign({}, n.props, { detailsFrom: 'orderDetails' }) }); }) });
+    res = await publish(fixed);
+    assert.equal(res.status, 200, res.body.message);
+
+    var status = (await knex('orders').where('id', ids.GA2).first()).customStatus;
+    res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2);
+    assert.equal(res.status, 200, res.body.message);
+    assert.deepEqual(res.body.dataArray[0], { sections: [
+      { title: 'Order', rows: [{ label: 'Name', text: 'GA2', href: null, tone: null }, { label: 'Status', text: status, href: null, tone: 'success' }], items: [] },
+      { title: 'Contact', rows: [{ label: 'Phone', text: '+91 98', href: 'tel:+9198', tone: null }, { label: 'Site', text: 'evil', href: null, tone: null }], items: [] }
+    ], more: true }, 'the empty row, the empty section and the script link are gone');
+    assert.deepEqual(seen.pop(), ['orderDetails', 'GA2', false]);
+
+    res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2 + '&more=1');
+    assert.deepEqual(res.body.dataArray[0], { sections: [{ title: 'More', rows: [{ label: 'Age', text: '3 days', href: null, tone: null }], items: [] }], more: false });
+    assert.deepEqual(seen.pop(), ['orderDetails', 'GA2', true]);
+
+    res = await call('GET', '/factory/details/order_facts?id=' + ids.GA2, null, 'c2');
+    assert.equal(res.status, 404, 'another company\'s order');
+    res = await call('GET', '/factory/details/order_view?id=' + ids.GA2);
+    assert.equal(res.status, 404);
+    assert.match(res.body.message, /no details/);
   });
 
   await t.test('...a function that stops being registered fails by name', async function() {
