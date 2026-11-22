@@ -337,6 +337,24 @@ test('a form inside a form: its own table, linked back, and kept from being dele
     assert.equal(theirs.body.dataArray.length, 0, 'another member\'s form is empty, not everybody\'s');
   });
 
+  await t.test('a record\'s view, listing another table, is read as its own table\'s record', async function() {
+    // No fields of its own: a heading and the member's cards (another table, with a form of its own).
+    var view = model.createScreen({ id: 'member_view', name: 'Member', source: 'members' });
+    view = model.addControl(view, 'label').document;
+    var added = model.addControl(view, 'list');
+    view = added.document;
+    [['source', 'cards'], ['belongsTo', 'memberId'], ['editScreen', 'card_edit'], ['columns', [{ field: 'number', label: 'Number' }]]].forEach(function(kv) {
+      view = model.setNodeProperty(view, added.node.id, 'props.' + kv[0], kv[1]);
+    });
+    assert.equal((await call('PUT', '/factory/screens/member_view/draft', { document: view })).status, 200);
+    var pub = await call('POST', '/factory/screens/member_view/publish');
+    assert.equal(pub.status, 200, pub.body.message);
+    var ada = (await call('POST', '/factory/records/member_edit/save', { values: { name: 'Ada L' } })).body.dataArray[0];
+    var read = await call('GET', '/factory/records/member_view/' + ada.id);
+    assert.equal(read.status, 200, read.body.message);
+    assert.equal(read.body.dataArray[0].name, 'Ada L', 'described by member_edit, not by the cards\' form');
+  });
+
   await t.test('a form shown inside another cannot be deleted, and says where it is shown', async function() {
     var res = await call('DELETE', '/factory/screens/card_edit');
     assert.equal(res.status, 400);
